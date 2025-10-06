@@ -1,0 +1,41 @@
+# R package gitignore
+
+# Build artifacts
+*.tar.gz
+*.o
+*.so
+*.dll
+build/
+man/
+
+# R session files
+.RData
+.Rhistory
+.Rprofile
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Compilation database
+compile_commands.json
+
+# Temporary files
+*.tmp
+*.temp
+
+# Log files
+*.log
+
+# Package check output
+*.Rcheck/
+
+# Development tools output
+.cache/
