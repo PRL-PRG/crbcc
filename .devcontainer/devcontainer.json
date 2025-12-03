@@ -1,0 +1,16 @@
+{
+  "name": "R Package Dev",
+  "build": { 
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools", 
+        "ikuyadeu.r"
+      ]
+    }
+  },
+  "remoteUser": "root"
+}
