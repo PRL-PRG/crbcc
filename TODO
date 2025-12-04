@@ -1,0 +1,9 @@
+* Add definitions for classes which dont exists yet
+* Fix compilation errors, which are mostly about reordering
+* Run throught the entire code again and add PROTECTs
+* ...
+* Add references
+* ==== READY TO BE COMPARED WITH -o0 compilation setting ===
+* Add inlining
+* Add constant folding
+* gg
