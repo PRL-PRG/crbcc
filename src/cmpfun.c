@@ -26,7 +26,7 @@ extern SEXP R_FalseValue;
 #define DOTSERR_OP 60
 #define DDVAL_OP 21
 
-#define DEBUG 
+//#define DEBUG 
 
 #ifdef DEBUG
 #define DEBUG_PRINT(...) Rprintf(__VA_ARGS__)
@@ -154,7 +154,7 @@ CompilerContext *make_no_value_ctx(CompilerContext *cntxt);
 CompilerContext *make_loop_ctx(CompilerContext *cntxt, int loop_label, int end_label);
 CompilerContext *make_arg_ctx(CompilerContext *cntxt);
 CompilerContext *make_promise_ctx(CompilerContext *cntxt);
-CodeBuffer *make_code_buffer();
+CodeBuffer *make_code_buffer(SEXP preseed);
 void free_code_buffer(CodeBuffer *cb);
 void cmp_const(SEXP val, CodeBuffer *cb, CompilerContext *cntxt);
 void cmp_sym(SEXP sym, CodeBuffer *cb, CompilerContext *cntxt);
@@ -474,11 +474,11 @@ SEXP find_locals( SEXP expr ) {
 
     SEXP union_symbol = Rf_install("union");
     SEXP call1 = PROTECT( Rf_lang3( union_symbol, body_locals, loop_var_str ) );
-    SEXP temp = PROTECT( Rf_eval( call1, R_BaseEnv ) );
+    SEXP temp = Rf_eval( call1, R_BaseEnv );
     SEXP call2 = PROTECT( Rf_lang3( union_symbol, temp, seq_locals ) );
     SEXP combined = Rf_eval( call2, R_BaseEnv );
 
-    UNPROTECT(2); // Unprotect call1, call2 (and temp implicit)
+    UNPROTECT(2); // call1, call2
     return combined;
   }
 
@@ -570,19 +570,22 @@ CompilerEnv * make_cenv( SEXP env ) {
 // @manual 5.2
 CompilerEnv * fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
 
-  add_cenv_frame( cntxt->env, getAttrib( forms, R_NamesSymbol ) );
+  CompilerEnv *new_cenv = (CompilerEnv *) malloc(sizeof(CompilerEnv));
+  new_cenv->top_frame = cntxt->env->top_frame;
+
+  add_cenv_frame( new_cenv, getAttrib( forms, R_NamesSymbol ) );
 
   SEXP locals_forms = find_locals_list( forms );
   SEXP locals_body = find_locals( body );
-
+  
   SEXP union_symbol = Rf_install("union");
   SEXP call = PROTECT( Rf_lang3( union_symbol, locals_forms, locals_body ) );
   SEXP locals = Rf_eval( call, R_BaseEnv ); 
   UNPROTECT(1);
 
-  add_cenv_vars( cntxt->env, locals );  
-  return cntxt->env;
+  add_cenv_vars( new_cenv, locals );  
 
+  return new_cenv;
 }
 
 // @manual 4.1
@@ -611,14 +614,8 @@ CompilerContext * make_toplevel_ctx( CompilerEnv *cenv ) {
 // @manual 4.2
 CompilerContext * make_function_ctx( CompilerContext * cntxt, SEXP forms, SEXP body ) {
 
-  CompilerEnv * nenv = fun_env(forms, body, cntxt);
-
-  CompilerContext * ncntxt = (CompilerContext *) malloc ( 1 * sizeof(CompilerContext) );
-  ncntxt->env = nenv;
-
-  // Copy options from parent context
-  ncntxt->toplevel = cntxt->toplevel;
-  ncntxt->tailcall = cntxt->tailcall;
+  CompilerEnv * env = fun_env( forms, body, cntxt );
+  CompilerContext * ncntxt = make_toplevel_ctx( env );
 
   ncntxt->optimize_level = cntxt->optimize_level;
   ncntxt->supress_all = cntxt->supress_all;
@@ -631,29 +628,44 @@ CompilerContext * make_function_ctx( CompilerContext * cntxt, SEXP forms, SEXP b
 // @manual 4.2
 CompilerContext * make_call_ctx( CompilerContext * cntxt, SEXP call ) {
 
-  cntxt->call = call;
-  return cntxt;
+  CompilerContext * ncntxt = (CompilerContext *) malloc ( 1 * sizeof(CompilerContext) );
+  
+  // Copy over the parent
+  *ncntxt = *cntxt;
+
+  ncntxt->call = call;
+  return ncntxt;
 
 };
 
 // manual 4.2
 CompilerContext * make_non_tail_call_ctx( CompilerContext * cntxt ) {
 
-    cntxt->tailcall = false;
-    return cntxt;
+    CompilerContext * ncntxt = (CompilerContext *) malloc ( 1 * sizeof(CompilerContext) );
+
+    *ncntxt = *cntxt;
+
+    ncntxt->tailcall = false;
+    return ncntxt;
   
 };
 
 // @manual 4.2
 CompilerContext * make_no_value_ctx( CompilerContext * cntxt ) {
 
-    cntxt->tailcall = false;
-    return cntxt;
+    CompilerContext * ncntxt = (CompilerContext *) malloc ( 1 * sizeof(CompilerContext) );
+
+    *ncntxt = *cntxt;
+
+    ncntxt->tailcall = false;
+    return ncntxt;
   
 };
 
 // @manual 4.2
 CompilerContext * make_loop_ctx( CompilerContext * cntxt, int loop_label, int end_label ) {
+
+  CompilerContext * ncntxt = make_no_value_ctx( cntxt );
 
   LoopInfo * li = (LoopInfo *) malloc ( 1 * sizeof( LoopInfo ) );
   li->loop_label_id = loop_label;
@@ -668,32 +680,43 @@ CompilerContext * make_loop_ctx( CompilerContext * cntxt, int loop_label, int en
 // @manual 4.2
 CompilerContext * make_arg_ctx( CompilerContext * cntxt ) {
 
-  cntxt->tailcall = false;
-  cntxt->toplevel = false;
+  // Alloc new instance
+  CompilerContext * ncntxt = (CompilerContext *) malloc ( 1 * sizeof(CompilerContext) );
 
-  if ( cntxt->loop != NULL )
-    cntxt->loop->goto_ok = false;
+  // Copy over the parent
+  *ncntxt = *cntxt;
+  
+  ncntxt->tailcall = false;
+  ncntxt->toplevel = false;
+  
+  if ( ncntxt->loop != NULL )
+    ncntxt->loop->goto_ok = false;
 
-  return cntxt;
+  return ncntxt;
 
 };
 
 // @manual 4.2
 CompilerContext * make_promise_ctx( CompilerContext * cntxt ) {
 
-  cntxt->tailcall = false;
-  cntxt->toplevel = true;
-  cntxt->need_return_jmp = true;
+  CompilerContext * ncntxt = (CompilerContext *) malloc ( 1 * sizeof(CompilerContext) );
 
-  if ( cntxt->loop != NULL )
-    cntxt->loop->goto_ok = false;
+  // Copy over the parent
+  *ncntxt = *cntxt;
 
-  return cntxt;
+  ncntxt->tailcall = true;
+  ncntxt->toplevel = false;
+  ncntxt->need_return_jmp = true;
+
+  if ( ncntxt->loop != NULL )
+    ncntxt->loop->goto_ok = false;
+
+  return ncntxt;
 
 };
 
 // @manual 3
-CodeBuffer * make_code_buffer() {
+CodeBuffer * make_code_buffer( SEXP preseed ) {
 
   CodeBuffer * cb = (CodeBuffer *) malloc ( 1 * sizeof( CodeBuffer ) );
 
@@ -711,10 +734,7 @@ CodeBuffer * make_code_buffer() {
   cb->expr_buf = R_NilValue; // TODO initialize expression buffer
   cb->srcref_buf = R_NilValue; // TODO initialize srcref buffer
 
-  // Put BC version at the start of the code buffer
-  SEXP ver = PROTECT( R_bcVersion() );
-  cb_putcode( cb, asInteger( ver ) );
-  UNPROTECT(1);
+  cb_putconst(cb, preseed);
 
   return cb;
 
@@ -730,6 +750,8 @@ void free_code_buffer(CodeBuffer *cb) {
 
 // @manual 2.4
 void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
+
+  DEBUG_PRINT("++ cmp_const: Compiling constant\n");
 
   if ( IDENTICAL( val, R_NilValue ) )
     cb_putcode( cb, LDNULL_OP );
@@ -751,6 +773,8 @@ void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
 // @manual 2.5
 void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt ) {
 
+  DEBUG_PRINT("++ cmp_sym: Compiling symbol '%s'\n", CHAR(PRINTNAME(sym)));
+
   if ( sym == R_DotsSymbol ) {
     // TODO warn about wrong usage of ... 
     cb_putcode( cb, DOTSERR_OP );
@@ -766,6 +790,7 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt ) {
     
     // TODO insert DDVAL_MISSOK_OP if missingOK argument is true
     cb_putcode( cb, DDVAL_OP );
+    cb_putcode( cb, ci );
     
     if ( cntxt->tailcall )
       cb_putcode( cb, RETURN_OP );
@@ -788,11 +813,23 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt ) {
 
 };
 
+
+void free_ctx( CompilerContext * cntxt ) {
+  
+  if (cntxt->loop)
+    free(cntxt->loop);
+  
+  if (cntxt)
+    free(cntxt);
+
+}
+
 // @manual 2.6
 // TODO add inlineOK argument
 void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
 
   // TODO handle locs
+  DEBUG_PRINT("++ cmp_call: Compiling function call\n");
 
   cntxt = make_call_ctx( cntxt, call );
   SEXP fun = CAR( call );
@@ -847,15 +884,19 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
   
   }
 
-  if ( cntxt->tailcall )
-    cb_putcode( cb, RETURN_OP );
+  // if ( cntxt->tailcall )
+  //   cb_putcode( cb, RETURN_OP );
 
   // TODO restore context
+
+  free_ctx( cntxt );
 
 };
 
 // @manual 2.6
 void cmp_call_sym_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
+
+  DEBUG_PRINT("++ cmp_call_sym_fun: Compiling function call with symbol function '%s'\n", CHAR(PRINTNAME(fun)));
 
   const char* maybe_NSE_symbols[] = {"bquote", NULL}; // Null works as terminator
   
@@ -882,22 +923,29 @@ void cmp_call_sym_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, Compiler
 
 void cmp_call_expr_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
 
+  DEBUG_PRINT("++ cmp_call_expr_fun: Compiling function call with expression function\n");
+
   CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
   cmp( fun, cb, ncntxt, true );
   cb_putcode( cb, CHECKFUN_OP );
   bool nse = false;
-  
-  cmp_call_args( args, cb, ncntxt, nse );
+
+  free_ctx( ncntxt );
+
+  cmp_call_args( args, cb, cntxt, nse );
   int ci = cb_putconst( cb, call );
   cb_putcode( cb, CALL_OP );
   cb_putcode( cb, ci );
 
-  if ( ncntxt->tailcall ) {
+  if ( cntxt->tailcall ) {
     cb_putcode( cb, RETURN_OP );
   }
+
 };
 
 void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool nse ) {
+
+  DEBUG_PRINT("++ cmp_call_args: Compiling function call arguments\n");
 
   SEXP names = getAttrib( args, R_NamesSymbol );
   CompilerContext * pnctxt = make_promise_ctx( cntxt );
@@ -930,9 +978,15 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
 
   }
 
+  free_ctx( pnctxt );
 };
 
 void cmp_tag( SEXP tag, CodeBuffer * cb ) {
+
+  DEBUG_PRINT("++ cmp_tag: Compiling argument tag\n");
+
+  if ( tag == R_NilValue || tag == R_MissingArg )
+    return;
 
   const char *name_str = CHAR(PRINTNAME(tag));
   
@@ -946,14 +1000,16 @@ void cmp_tag( SEXP tag, CodeBuffer * cb ) {
 
 void cmp_const_arg( SEXP a, CodeBuffer * cb, CompilerContext * cntxt ) {
 
-  if ( a == R_NilValue )
+  DEBUG_PRINT("++ cmp_const_arg: Compiling constant argument\n");
+
+  if ( isNull(a) )
     cb_putcode( cb, PUSHNULLARG_OP );
-  else if ( a == R_TrueValue )
+  else if ( IDENTICAL(a, R_TrueValue) )
     cb_putcode( cb, PUSHTRUEARG_OP );
-  else if ( a == R_FalseValue )
+  else if ( IDENTICAL(a, R_FalseValue) )
     cb_putcode( cb, PUSHFALSEARG_OP );
   else {
-    int ci = cb_putconst( cb, gen_code( a, cntxt, R_NilValue, R_NilValue ) );
+    int ci = cb_putconst( cb, a );
     cb_putcode( cb, PUSHCONSTARG_OP );
     cb_putcode( cb, ci );
   }
@@ -1127,7 +1183,9 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
   case CLOSXP:
     DEBUG_PRINT(">> cmpfun: Compiling CLOSXP (Function)\n");
     
-    CompilerContext * cntxt = make_toplevel_ctx( make_cenv( CLOENV(f) ) );
+    CompilerEnv * cenv = make_cenv( CLOENV(f) );
+
+    CompilerContext * cntxt = make_toplevel_ctx( cenv );
     CompilerContext * ncntxt = make_function_ctx(cntxt, FORMALS(f), BODY(f));
     
     if ( may_call_browser( BODY(f), ncntxt ) ) {
@@ -1173,6 +1231,12 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
     UNPROTECT(1);
 
     DEBUG_PRINT("<< cmpfun done, returning\n");
+
+    free(cenv);
+    free(ncntxt->env);
+    free_ctx(ncntxt);
+    free_ctx(cntxt);
+
     return val;
 
   case BUILTINSXP:
@@ -1191,7 +1255,7 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
 // @manual 2.1
 SEXP gen_code( SEXP e, CompilerContext * cntxt, SEXP gen, SEXP loc ) {
 
-  CodeBuffer * cb = make_code_buffer(); //TODO pass expr & loc
+  CodeBuffer * cb = make_code_buffer(e); //TODO pass expr & loc
 
   if ( Rf_isNull( gen ) )
     cmp( e, cb, cntxt, false );
@@ -1213,8 +1277,11 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
   DEBUG_PRINT("   Code size: %d\n", cb->code_count);
   DEBUG_PRINT("   Constant pool size: %d\n", cb->const_count);
 
-  SEXP code_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count ) );
-  memcpy(INTEGER(code_vec), cb->code, cb->code_count * sizeof(int));
+  SEXP code_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1 ) );
+
+  // Put bytecode version as first instruction
+  INTEGER(code_vec)[0] = asInteger(R_bcVersion());
+  memcpy(INTEGER(code_vec) + 1, cb->code, cb->code_count * sizeof(int));
 
   SEXP const_pool;
 
