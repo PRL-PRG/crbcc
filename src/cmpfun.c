@@ -476,8 +476,8 @@ SEXP get_assigned_var( SEXP var ) {
   else {
     // Handle complex assignments names(x) <- 1
     while ( TYPEOF( v ) == LANGSXP ) {
-      if ( LENGTH( v ) < 2 ) Rf_error("Bad assignment");
-      v = CADDR( v );
+      if ( Rf_length( v ) < 2 ) Rf_error("Bad assignment");
+      v = CADR( v );
       if ( v == R_NilValue ) Rf_error("Bad assignment");
     }
 
@@ -681,6 +681,7 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
   CompilerEnv *new_cenv = (CompilerEnv *) R_alloc (1, sizeof( CompilerEnv ));
 
   new_cenv->shadow_stack = Rf_allocVector( VECSXP, 1 );
+  PROTECT( new_cenv->shadow_stack );
   SET_VECTOR_ELT( new_cenv->shadow_stack, 0, R_NilValue ); 
 
   new_cenv->top_frame = cntxt->env->top_frame;
@@ -715,7 +716,7 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
   add_cenv_frame( new_cenv, arg_names );
   add_cenv_vars( new_cenv, locals );  
 
-  UNPROTECT(1); // locals
+  UNPROTECT(2); // locals, shadow_stack
   return new_cenv;
 }
 
@@ -1033,8 +1034,6 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
       cmp_call_expr_fun( fun, args, call, cb, cntxt );
     
     }
-
-    // TODO restore curloc
   
   }
 
