@@ -123,10 +123,10 @@ typedef struct CodeBuffer {
   int label_generator_id;         // For generating unique labels
 
   // Source tracking
-  int * expr_buf;                  // Buffer for source expressions
+  int * expr_buf;                  // Buffer for expressions
   int * srcref_buf;                // Buffer for source references
 
-  SEXP current_expr;   
+  SEXP current_expr;
   SEXP current_srcref;
 
   bool srcref_tracking_on;         // Is source reference tracking on
@@ -142,10 +142,12 @@ typedef struct VarInfo {
 
 } VarInfo;
 
-typedef struct SavedLoc {
+// in the original compiler loc = list(expr, srcref)
+typedef struct Loc {
+    bool is_null;
     SEXP expr;
     SEXP srcref;
-} SavedLoc;
+} Loc;
 
 // TODO here maybe should add InlineHandler structs for managing inlining of functions
 // TODO label table
@@ -158,15 +160,15 @@ SEXP get_expr_srcref(SEXP expr);
 SEXP extract_srcref(SEXP sref, int idx);
 SEXP get_block_srcref(SEXP block_sref, int idx);
 
-SavedLoc cb_savecurloc(CodeBuffer *cb);
-void cb_restorecurloc(CodeBuffer *cb, SavedLoc saved);
+Loc cb_savecurloc(CodeBuffer *cb);
+void cb_restorecurloc(CodeBuffer *cb, Loc saved);
 void cb_setcurloc(CodeBuffer *cb, SEXP expr, SEXP sref);
 void cb_setcurexpr(CodeBuffer *cb, SEXP expr);
 
 bool find_var(SEXP var, CompilerContext *cntxt);
 SEXP find_locals(SEXP expr, SEXP known_locals);
 SEXP find_locals_list(SEXP elist, SEXP known_locals);
-SEXP gen_code(SEXP e, CompilerContext *cntxt, SEXP gen, SEXP loc);
+SEXP gen_code(SEXP e, CompilerContext *cntxt, SEXP gen, Loc loc);
 SEXP get_assigned_var(SEXP var);
 void add_cenv_vars(CompilerEnv *cenv, SEXP vars);
 void add_cenv_frame(CompilerEnv *cenv, SEXP vars);
@@ -180,7 +182,7 @@ CompilerContext *make_no_value_ctx(CompilerContext *cntxt);
 CompilerContext *make_loop_ctx(CompilerContext *cntxt, int loop_label, int end_label);
 CompilerContext *make_arg_ctx(CompilerContext *cntxt);
 CompilerContext *make_promise_ctx(CompilerContext *cntxt);
-CodeBuffer *make_code_buffer(SEXP preseed, SEXP loc);
+CodeBuffer *make_code_buffer(SEXP preseed, Loc loc);
 void cmp_const(SEXP val, CodeBuffer *cb, CompilerContext *cntxt);
 void cmp_sym(SEXP sym, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok);
 void cmp_call(SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
@@ -213,35 +215,35 @@ static bool is_in_set(SEXP sym, SEXP set);
 static SEXP union_sets(SEXP a, SEXP b);
 
 
-SEXP get_expr_srcref(SEXP expr) {
-  return Rf_getAttrib(expr, Rf_install("srcref"));
-}
-
 SEXP extract_srcref(SEXP sref, int idx) {
 
-  if ( TYPEOF(sref) == VECSXP && Rf_length(sref) >= idx )
+  if ( Rf_isList(sref) && Rf_length(sref) >= idx )
     return VECTOR_ELT(sref, idx - 1);
 
-  if ( TYPEOF(sref) == INTSXP && Rf_length(sref) >= 6 )
+  if ( Rf_isInteger(sref) && Rf_length(sref) >= 6 )
     return sref;
 
   return R_NilValue;
 
 }
 
-// TODO why
+SEXP get_expr_srcref(SEXP expr) {
+  SEXP sattr = Rf_getAttrib(expr, Rf_install("srcref"));
+  return extract_srcref(sattr, 1);
+}
+
 SEXP get_block_srcref(SEXP block_sref, int idx) {
   return extract_srcref(block_sref, idx);
 }
 
-SavedLoc cb_savecurloc(CodeBuffer *cb) {
-  SavedLoc saved;
+Loc cb_savecurloc(CodeBuffer *cb) {
+  Loc saved;
   saved.expr = cb->current_expr;
   saved.srcref = cb->current_srcref;
   return saved;
 }
 
-void cb_restorecurloc(CodeBuffer *cb, SavedLoc saved) {
+void cb_restorecurloc(CodeBuffer *cb, Loc saved) {
   if (cb->expr_tracking_on) cb->current_expr = saved.expr;
   if (cb->srcref_tracking_on) cb->current_srcref = saved.srcref;
 }
@@ -770,26 +772,24 @@ CompilerContext * make_call_ctx( CompilerContext * cntxt, SEXP call ) {
 // manual 4.2
 CompilerContext * make_non_tail_call_ctx( CompilerContext * cntxt ) {
 
-    CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
+  CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
 
-    *ncntxt = *cntxt;
+  *ncntxt = *cntxt;
 
-    ncntxt->tailcall = false;
-    return ncntxt;
+  ncntxt->tailcall = false;
+  return ncntxt;
   
 };
 
 // @manual 4.2
 CompilerContext * make_no_value_ctx( CompilerContext * cntxt ) {
 
-    CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
+  CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
 
-    *ncntxt = *cntxt;
+  *ncntxt = *cntxt;
 
-    ncntxt->tailcall = false;
-    return ncntxt;// 1. The State (What file/line are we in RIGHT NOW?)
-  SEXP current_expr;   
-  SEXP current_srcref;
+  ncntxt->tailcall = false;
+  return ncntxt;
   
 };
 
@@ -847,24 +847,27 @@ CompilerContext * make_promise_ctx( CompilerContext * cntxt ) {
 };
 
 // @manual 3
-CodeBuffer * make_code_buffer( SEXP preseed, SEXP loc ) {
+CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
 
   CodeBuffer * cb = (CodeBuffer *) R_alloc (1, sizeof( CodeBuffer ) );
 
   cb->expr_tracking_on = true;
   cb->srcref_tracking_on = true;
 
-  if ( loc == R_NilValue ) {
+  if ( loc.is_null ) {
+
     cb->current_expr = preseed;
     cb->current_srcref = get_expr_srcref( preseed );
+  
   } else {
-    cb->current_expr = preseed;
-    cb->current_srcref = R_NilValue;
+  
+    cb->current_expr = loc.expr;
+    cb->current_srcref = loc.srcref;
+  
   }
 
-  if ( cb->current_srcref == R_NilValue ) {
+  if ( Rf_isNull( cb->current_srcref ) )
     cb->srcref_tracking_on = false;
-  }
 
   cb->constant_pool_handle = Rf_allocVector(VECSXP, 1);
   PROTECT( cb->constant_pool_handle );
@@ -977,8 +980,10 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_o
 // TODO add inlineOK argument
 void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
 
-  // TODO handle locs
   DEBUG_PRINT("++ cmp_call: Compiling function call\n");
+  
+  Loc saved = cb_savecurloc( cb );
+  cb_setcurexpr( cb, call );
 
   cntxt = make_call_ctx( cntxt, call );
   SEXP fun = CAR( call );
@@ -1002,7 +1007,7 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
         SEXP def = find_fun_def( fun, cntxt );
         if ( Rf_isNull(def) ) {
           DEBUG_PRINT("?? cmp_call: Undefined function symbol '%s'\n", CHAR(PRINTNAME(fun)));
-          warning("Undefined function: %s", CHAR(PRINTNAME(fun)));
+          // warning("Undefined function: %s", CHAR(PRINTNAME(fun)));
         } else {
           DEBUG_PRINT("++ cmp_call: Found function definition for symbol '%s'\n", CHAR(PRINTNAME(fun)));
           check_call( def, call ); // todo handle exceptions
@@ -1033,10 +1038,7 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
   
   }
 
-  // if ( cntxt->tailcall )
-  //   cb_putcode( cb, RETURN_OP );
-
-  // TODO restore context
+  cb_restorecurloc( cb, saved );
 
 };
 
@@ -1134,7 +1136,7 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
       if ( nse )
         ci = cb_putconst( cb, a );
       else
-        ci = cb_putconst( cb, gen_code( a, pnctxt, R_NilValue, R_NilValue ) );
+        ci = cb_putconst( cb, gen_code( a, pnctxt, R_NilValue, cb_savecurloc( cb ) ) );
       
       cb_putcode( cb, MAKEPROM_OP );
       cb_putcode( cb, ci );
@@ -1221,7 +1223,7 @@ void cb_putcode( CodeBuffer * cb, int opcode ) {
     int srcref_idx = cb_putconst( cb, cb->current_srcref );
     cb->srcref_buf[ cb->code_count ] = srcref_idx;
   } else {
-    cb->srcref_buf[ cb->code_count ] = 0; // No srcref
+    cb->srcref_buf[ cb->code_count ] = -1; // No srcref
   }
 
   cb->code_count += 1;
@@ -1367,7 +1369,7 @@ bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt) {
 // @manual 2.3
 void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, bool setloc ) {
 
-  SavedLoc sloc;
+  Loc sloc;
 
   if ( setloc ) {
     sloc = cb_savecurloc(cb);
@@ -1453,8 +1455,6 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
       DEBUG_PRINT("!! cmpfun: Function may call browser, skipping compilation\n");
       return f;
     }
-
-    SEXP loc; 
     
     bool is_block = false;
     if ( TYPEOF( BODY(f) ) == LANGSXP ) {
@@ -1467,15 +1467,17 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
       }
     }
 
-    if ( !is_block )
-      loc = PROTECT( Rf_list2( R_NilValue, R_NilValue ) );
+    Loc loc;
+    loc.is_null = false;
+
+    if ( !is_block ) {
+      loc.expr = BODY(f);
+      loc.srcref = get_expr_srcref( f );
+    }
     else
-      loc = R_NilValue;
+      loc.is_null = true;
     
     SEXP b = PROTECT( gen_code( BODY(f), ncntxt, R_NilValue, loc ) );
-
-    if ( !is_block )
-      UNPROTECT(1); // loc
 
     DEBUG_PRINT("<< cmpfun: Compilation finished, creating closure\n");
 
@@ -1508,7 +1510,7 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
 };
 
 // @manual 2.1
-SEXP gen_code( SEXP e, CompilerContext * cntxt, SEXP gen, SEXP loc ) {
+SEXP gen_code( SEXP e, CompilerContext * cntxt, SEXP gen, Loc loc ) {
 
   CodeBuffer * cb = make_code_buffer(e, loc);
   PROTECT( cb->constant_pool_handle ); // Protect constant pool handle
