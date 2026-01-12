@@ -51,7 +51,7 @@ typedef struct CompilerContext {
   bool tailcall;                  // Is this in tail position?
   bool need_return_jmp;           // Does return() need a longjmp?
 
-  short optimize_level;           // Integer (0-3) optimization level TODO explain
+  short optimize_level;           // Integer (0-3) optimization level
 
   // Error flags
   int supress_all;
@@ -117,20 +117,20 @@ typedef struct CodeBuffer {
   int const_count;                // Number of constants in the pool
   int const_capacity;             // Capacity of the constant pool
 
-  // Label management (maps label names (strings) to code offsets (ints))
+  // TODO Label management (maps label names (strings) to code offsets (ints))
   // This needs to be a hashmap
   void *label_table;
   int label_generator_id;         // For generating unique labels
 
   // Source tracking
-  SEXP expr_buf;                  // Buffer for source expressions
-  SEXP srcref_buf;                // Buffer for source references
-
-  int loc_count;                  // Count of source locations
-  int loc_capacity;               // Capacity of source location buffers
+  int * expr_buf;                  // Buffer for source expressions
+  int * srcref_buf;                // Buffer for source references
 
   SEXP current_expr;   
   SEXP current_srcref;
+
+  bool srcref_tracking_on;         // Is source reference tracking on
+  bool expr_tracking_on;           // Is expression tracking on
 
 } CodeBuffer;
 
@@ -142,13 +142,26 @@ typedef struct VarInfo {
 
 } VarInfo;
 
+typedef struct SavedLoc {
+    SEXP expr;
+    SEXP srcref;
+} SavedLoc;
+
 // TODO here maybe should add InlineHandler structs for managing inlining of functions
 // TODO label table
 // TODO compile() function
-// TODO I think the context make. fns should be returning new instances instead of modifying in place
 
 // Forward declarations for all defined functions
 // because the compiler keeps yelling at me
+
+SEXP get_expr_srcref(SEXP expr);
+SEXP extract_srcref(SEXP sref, int idx);
+SEXP get_block_srcref(SEXP block_sref, int idx);
+
+SavedLoc cb_savecurloc(CodeBuffer *cb);
+void cb_restorecurloc(CodeBuffer *cb, SavedLoc saved);
+void cb_setcurloc(CodeBuffer *cb, SEXP expr, SEXP sref);
+void cb_setcurexpr(CodeBuffer *cb, SEXP expr);
 
 bool find_var(SEXP var, CompilerContext *cntxt);
 SEXP find_locals(SEXP expr, SEXP known_locals);
@@ -167,7 +180,7 @@ CompilerContext *make_no_value_ctx(CompilerContext *cntxt);
 CompilerContext *make_loop_ctx(CompilerContext *cntxt, int loop_label, int end_label);
 CompilerContext *make_arg_ctx(CompilerContext *cntxt);
 CompilerContext *make_promise_ctx(CompilerContext *cntxt);
-CodeBuffer *make_code_buffer(SEXP preseed);
+CodeBuffer *make_code_buffer(SEXP preseed, SEXP loc);
 void cmp_const(SEXP val, CodeBuffer *cb, CompilerContext *cntxt);
 void cmp_sym(SEXP sym, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok);
 void cmp_call(SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
@@ -199,6 +212,56 @@ static SEXP R_bcVersion();
 static bool is_in_set(SEXP sym, SEXP set);
 static SEXP union_sets(SEXP a, SEXP b);
 
+
+SEXP get_expr_srcref(SEXP expr) {
+  return Rf_getAttrib(expr, Rf_install("srcref"));
+}
+
+SEXP extract_srcref(SEXP sref, int idx) {
+
+  if ( TYPEOF(sref) == VECSXP && Rf_length(sref) >= idx )
+    return VECTOR_ELT(sref, idx - 1);
+
+  if ( TYPEOF(sref) == INTSXP && Rf_length(sref) >= 6 )
+    return sref;
+
+  return R_NilValue;
+
+}
+
+// TODO why
+SEXP get_block_srcref(SEXP block_sref, int idx) {
+  return extract_srcref(block_sref, idx);
+}
+
+SavedLoc cb_savecurloc(CodeBuffer *cb) {
+  SavedLoc saved;
+  saved.expr = cb->current_expr;
+  saved.srcref = cb->current_srcref;
+  return saved;
+}
+
+void cb_restorecurloc(CodeBuffer *cb, SavedLoc saved) {
+  if (cb->expr_tracking_on) cb->current_expr = saved.expr;
+  if (cb->srcref_tracking_on) cb->current_srcref = saved.srcref;
+}
+
+void cb_setcurloc(CodeBuffer *cb, SEXP expr, SEXP sref) {
+  if (cb->expr_tracking_on) cb->current_expr = expr;
+  if (cb->srcref_tracking_on) cb->current_srcref = sref;
+}
+
+void cb_setcurexpr(CodeBuffer *cb, SEXP expr) {
+  if (cb->expr_tracking_on) cb->current_expr = expr;
+
+  if (cb->srcref_tracking_on) {
+    SEXP sref = get_expr_srcref(expr);
+
+    if ( sref != R_NilValue ) {
+        cb->current_srcref = sref;
+    }
+  }
+}
 
 static bool is_base_var(SEXP sym, CompilerContext *cntxt) {
 
@@ -433,7 +496,6 @@ static bool is_in_set(SEXP sym, SEXP set) {
   return false;
 }
 
-//TODO implement this in places
 static SEXP union_sets(SEXP a, SEXP b) {
 
   if (a == R_NilValue) return b;
@@ -446,7 +508,6 @@ static SEXP union_sets(SEXP a, SEXP b) {
     return res;
 }
 
-// TODO protects
 SEXP find_locals_list( SEXP elist, SEXP known_locals ) {
 
   // Initialize empty list of locals
@@ -461,6 +522,7 @@ SEXP find_locals_list( SEXP elist, SEXP known_locals ) {
 
     // Find locals in the expression
     SEXP new_vars = find_locals( expr, known_locals );
+    PROTECT( new_vars );
 
     if ( new_vars != R_NilValue ) {
       if (found == R_NilValue)
@@ -469,6 +531,7 @@ SEXP find_locals_list( SEXP elist, SEXP known_locals ) {
         found = union_sets(found, new_vars);
     }
 
+    UNPROTECT(1); // new_vars
     node = CDR( node );
   }
   return found;
@@ -598,7 +661,6 @@ CompilerEnv * make_cenv( SEXP env ) {
   // Allocate the topmost frame
   cenv->top_frame = (EnvFrame *) R_alloc (1, sizeof( EnvFrame ));
 
-  // TODO what should the initial values be
   cenv->top_frame->parent = NULL;
   cenv->top_frame->r_env = env;
   cenv->top_frame->extra_vars = R_NilValue;
@@ -785,11 +847,26 @@ CompilerContext * make_promise_ctx( CompilerContext * cntxt ) {
 };
 
 // @manual 3
-CodeBuffer * make_code_buffer( SEXP preseed ) {
+CodeBuffer * make_code_buffer( SEXP preseed, SEXP loc ) {
 
   CodeBuffer * cb = (CodeBuffer *) R_alloc (1, sizeof( CodeBuffer ) );
-  
-  cb->constant_pool_handle = Rf_allocVector(VECSXP, 3);
+
+  cb->expr_tracking_on = true;
+  cb->srcref_tracking_on = true;
+
+  if ( loc == R_NilValue ) {
+    cb->current_expr = preseed;
+    cb->current_srcref = get_expr_srcref( preseed );
+  } else {
+    cb->current_expr = preseed;
+    cb->current_srcref = R_NilValue;
+  }
+
+  if ( cb->current_srcref == R_NilValue ) {
+    cb->srcref_tracking_on = false;
+  }
+
+  cb->constant_pool_handle = Rf_allocVector(VECSXP, 1);
   PROTECT( cb->constant_pool_handle );
 
   // Initialize code buffer itself
@@ -806,19 +883,13 @@ CodeBuffer * make_code_buffer( SEXP preseed ) {
   cb->const_capacity = 0; 
   cb->label_generator_id = 0;
 
-  cb->current_expr = preseed;
-  cb->current_srcref = R_NilValue;
-
   // Initialize source tracking
-  cb->expr_buf = PROTECT(Rf_allocVector(VECSXP, cb->code_capacity)); 
-  SET_VECTOR_ELT(cb->constant_pool_handle, 1, cb->expr_buf);
-
-  cb->srcref_buf = PROTECT(Rf_allocVector(VECSXP, cb->code_capacity));
-  SET_VECTOR_ELT(cb->constant_pool_handle, 2, cb->srcref_buf);
+  cb->expr_buf = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
+  cb->srcref_buf = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
 
   cb_putconst(cb, preseed);
 
-  UNPROTECT(3); // constant_pool_handle, expr_buf, srcref_buf
+  UNPROTECT(1); // constant_pool_handle
   return cb;
 
 };
@@ -1124,35 +1195,34 @@ void cb_putcode( CodeBuffer * cb, int opcode ) {
     // Resize code array
     cb->code_capacity *= 2;
 
-    // realloc logic
+    // realloc logic !! TOSTYLE duplicate code
     int *new_code = (int *) R_alloc(cb->code_capacity, sizeof(int));
     memcpy(new_code, cb->code, (cb->code_capacity / 2) * sizeof(int));
     cb->code = new_code;
   
-    
     // Update the source tracking buffers
-    SEXP new_expr = PROTECT(Rf_allocVector(VECSXP, cb->code_capacity));
-    SEXP new_ref  = PROTECT(Rf_allocVector(VECSXP, cb->code_capacity));
-    
-    for(int i=0; i < cb->code_count; i++) {
-        SET_VECTOR_ELT(new_expr, i, VECTOR_ELT(cb->expr_buf, i));
-        SET_VECTOR_ELT(new_ref, i, VECTOR_ELT(cb->srcref_buf, i));
-    }
+    int *new_expr_buf = (int *) R_alloc(cb->code_capacity, sizeof(int));
+    memcpy(new_expr_buf, cb->expr_buf, (cb->code_capacity / 2) * sizeof(int));
+    cb->expr_buf = new_expr_buf;
 
-    cb->expr_buf = new_expr;
-    cb->srcref_buf = new_ref;
-    SET_VECTOR_ELT(cb->constant_pool_handle, 1, new_expr);
-    SET_VECTOR_ELT(cb->constant_pool_handle, 2, new_ref);
-  
-    UNPROTECT(2); // new_expr, new_ref
+    int *new_srcref_buf = (int *) R_alloc(cb->code_capacity, sizeof(int));
+    memcpy(new_srcref_buf, cb->srcref_buf, (cb->code_capacity / 2) * sizeof(int));
+    cb->srcref_buf = new_srcref_buf;
 
   }
 
   cb->code[ cb->code_count ] = opcode;
   
   // handle source tracking
-  SET_VECTOR_ELT(cb->expr_buf, cb->code_count, cb->current_expr);
-  SET_VECTOR_ELT(cb->srcref_buf, cb->code_count, cb->current_srcref);
+  int expression_idx = cb_putconst( cb, cb->current_expr );
+  cb->expr_buf[ cb->code_count ] = expression_idx;
+
+  if (  cb->current_srcref != R_NilValue ) {
+    int srcref_idx = cb_putconst( cb, cb->current_srcref );
+    cb->srcref_buf[ cb->code_count ] = srcref_idx;
+  } else {
+    cb->srcref_buf[ cb->code_count ] = 0; // No srcref
+  }
 
   cb->code_count += 1;
 
@@ -1295,14 +1365,13 @@ bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt) {
 };
 
 // @manual 2.3
-// TODO add missingOK argument
 void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, bool setloc ) {
 
-  SEXP saved_expr = cb->current_expr;
-  SEXP saved_srcref = cb->current_srcref;
+  SavedLoc sloc;
 
   if ( setloc ) {
-    dloc( e, cb );
+    sloc = cb_savecurloc(cb);
+    cb_setcurexpr(cb, e);
   }
 
   // TODO constant fold here (ce means constant expression i guess)
@@ -1349,8 +1418,8 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
     cmp_const( ce, cb, cntxt );
 
   // Restore previous location
-  cb->current_expr = saved_expr;
-  cb->current_srcref = saved_srcref;
+  if ( setloc )
+    cb_restorecurloc(cb, sloc);
 
 };
 
@@ -1441,7 +1510,7 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
 // @manual 2.1
 SEXP gen_code( SEXP e, CompilerContext * cntxt, SEXP gen, SEXP loc ) {
 
-  CodeBuffer * cb = make_code_buffer(e); //TODO pass expr & loc
+  CodeBuffer * cb = make_code_buffer(e, loc);
   PROTECT( cb->constant_pool_handle ); // Protect constant pool handle
 
   if ( Rf_isNull( gen ) )
@@ -1465,24 +1534,43 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
 
   SEXP code_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1 ) );
 
-  // Reduce source tracking buffers to actual size
-  SEXP expr_buf = PROTECT(Rf_allocVector(VECSXP, cb->code_count));
-  SEXP srcref_buf = PROTECT(Rf_allocVector(VECSXP, cb->code_count));
+  if ( cb->srcref_tracking_on ) {
 
-  for (int i = 0; i < cb->code_count; i++) {
-    SET_VECTOR_ELT(expr_buf, i, VECTOR_ELT(cb->expr_buf, i));
-    SET_VECTOR_ELT(srcref_buf, i, VECTOR_ELT(cb->srcref_buf, i));
+    SEXP srcref_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1) );
+    int * srcref_ptr = INTEGER( srcref_vec );
+  
+    srcref_ptr[0] = NA_INTEGER; 
+
+    for (int i = 0; i < cb->code_count; i++)
+      srcref_ptr[i+1] = cb->srcref_buf[i];
+
+    setAttrib(srcref_vec, R_ClassSymbol, Rf_mkString("srcrefsIndex"));
+    cb_putconst( cb, srcref_vec ); // Ensure srcref_buf is in constant pool
+
+    UNPROTECT(1); // srcref_vec
+
   }
 
-  setAttrib(expr_buf, R_ClassSymbol, Rf_mkString("expressionsIndex"));
-  setAttrib(srcref_buf, R_ClassSymbol, Rf_mkString("srcrefsIndex"));
+  if ( cb->expr_tracking_on ) {
+
+    SEXP expr_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1) );
+    int * expr_ptr = INTEGER( expr_vec );
+
+    expr_ptr[0] = NA_INTEGER; 
+
+    for (int i = 0; i < cb->code_count; i++)
+      expr_ptr[i+1] = cb->expr_buf[i];
+
+    setAttrib(expr_vec, R_ClassSymbol, Rf_mkString("expressionsIndex"));
+    cb_putconst( cb, expr_vec ); // Ensure expr_buf is in constant pool
+
+    UNPROTECT(1); // expr_vec
+
+  }
 
   // Put bytecode version as first instruction
   INTEGER(code_vec)[0] = asInteger(R_bcVersion());
   memcpy(INTEGER(code_vec) + 1, cb->code, cb->code_count * sizeof(int));
-
-  cb_putconst( cb, expr_buf ); // Ensure expr_buf is in constant pool
-  cb_putconst( cb, srcref_buf ); // Ensure srcref_buf is in constant pool
 
   SEXP const_pool;
 
@@ -1508,7 +1596,7 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
     
   SEXP final_bcode = Rf_eval(full_call, R_BaseEnv);
 
-  UNPROTECT(6); // code_vec, const_pool, inner_call, full_call, expr_buf, srcref_buf
+  UNPROTECT(4); // code_vec, const_pool, inner_call, full_call
   return final_bcode;
 
 }
