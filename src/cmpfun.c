@@ -28,6 +28,7 @@ extern SEXP R_FalseValue;
 #define DOMISSING_OP 40
 #define DODOTS_OP 32
 #define DDVAL_MISSOK_OP 93
+#define SWITCH_OP 102
 
 // #define DEBUG 
 
@@ -117,10 +118,8 @@ typedef struct CodeBuffer {
   int const_count;                // Number of constants in the pool
   int const_capacity;             // Capacity of the constant pool
 
-  // TODO Label management (maps label names (strings) to code offsets (ints))
-  // This needs to be a hashmap
-  void *label_table;
-  int label_generator_id;         // For generating unique labels
+  // Label management
+  LabelTable label_table;
 
   // Source tracking
   int * expr_buf;                  // Buffer for expressions
@@ -132,7 +131,26 @@ typedef struct CodeBuffer {
   bool srcref_tracking_on;         // Is source reference tracking on
   bool expr_tracking_on;           // Is expression tracking on
 
+  struct SwitchPatch *switch_patches;    // Linked list head of switch statement patches
+
 } CodeBuffer;
+
+typedef struct LabelTable {
+
+  int *table;                      // Dynamic array of labels, ID corresponds to index
+  int capacity;                       // Array capacity
+  int labels_issued;               // Number of labels issued so far
+
+} LabelTable;
+
+typedef struct SwitchPatch {
+
+  int cb_index;                   // Position in code buffer to patch
+  int *label_ids;                 // Array of label IDs to jump to
+  int count;                      // Number of label IDs
+  SwitchPatch *next;              // Next patch in linked list
+
+} SwitchPatch;
 
 typedef struct VarInfo {
 
@@ -156,22 +174,34 @@ typedef struct Loc {
 // Forward declarations for all defined functions
 // because the compiler keeps yelling at me
 
-SEXP get_expr_srcref(SEXP expr);
-SEXP extract_srcref(SEXP sref, int idx);
-SEXP get_block_srcref(SEXP block_sref, int idx);
+//  === CODE BUFFER FUNCTIONS ===
+CodeBuffer *make_code_buffer(SEXP preseed, Loc loc);
 
+// Source location tracking with helpers
 Loc cb_savecurloc(CodeBuffer *cb);
 void cb_restorecurloc(CodeBuffer *cb, Loc saved);
 void cb_setcurloc(CodeBuffer *cb, SEXP expr, SEXP sref);
 void cb_setcurexpr(CodeBuffer *cb, SEXP expr);
+SEXP get_expr_srcref(SEXP expr);
+SEXP extract_srcref(SEXP sref, int idx);
+SEXP get_block_srcref(SEXP block_sref, int idx);
 
-bool find_var(SEXP var, CompilerContext *cntxt);
-SEXP find_locals(SEXP expr, SEXP known_locals);
-SEXP find_locals_list(SEXP elist, SEXP known_locals);
-SEXP gen_code(SEXP e, CompilerContext *cntxt, SEXP gen, Loc loc);
-SEXP get_assigned_var(SEXP var);
-void add_cenv_vars(CompilerEnv *cenv, SEXP vars);
-void add_cenv_frame(CompilerEnv *cenv, SEXP vars);
+// Label management
+int cb_makelabel(CodeBuffer *cb);
+void cb_putlabel(CodeBuffer *cb, int label_id);
+void cb_patchlabels(CodeBuffer *cb);
+void ensure_label_capacity(LabelTable *lt, int needed_index);
+
+// Code emission and constant pool management
+void cb_putcode(CodeBuffer *cb, int opcode);
+int cb_getcode(CodeBuffer *cb, int pos);
+int cb_putconst(CodeBuffer *cb, SEXP item);
+SEXP cb_getconst(CodeBuffer *cb, int idx);
+void cb_putswitch(CodeBuffer *cb, int *label_ids, int count);
+
+// === CONTEXT AND ENVIRONMENT FUNCTIONS ===
+
+// Constructors for various compiler contexts etc
 CompilerEnv *make_cenv(SEXP env);
 CompilerEnv *make_fun_env(SEXP forms, SEXP body, CompilerContext *cntxt);
 CompilerContext *make_toplevel_ctx(CompilerEnv *cenv);
@@ -182,7 +212,13 @@ CompilerContext *make_no_value_ctx(CompilerContext *cntxt);
 CompilerContext *make_loop_ctx(CompilerContext *cntxt, int loop_label, int end_label);
 CompilerContext *make_arg_ctx(CompilerContext *cntxt);
 CompilerContext *make_promise_ctx(CompilerContext *cntxt);
-CodeBuffer *make_code_buffer(SEXP preseed, Loc loc);
+
+// Environment manipulation
+void add_cenv_vars(CompilerEnv *cenv, SEXP vars);
+void add_cenv_frame(CompilerEnv *cenv, SEXP vars);
+
+// === Compilation functions ===
+void cmp(SEXP e, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok, bool setloc);
 void cmp_const(SEXP val, CodeBuffer *cb, CompilerContext *cntxt);
 void cmp_sym(SEXP sym, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok);
 void cmp_call(SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
@@ -191,14 +227,17 @@ void cmp_call_expr_fun(SEXP fun, SEXP args, SEXP call, CodeBuffer *cb, CompilerC
 void cmp_call_args(SEXP args, CodeBuffer *cb, CompilerContext *cntxt, bool nse);
 void cmp_tag(SEXP tag, CodeBuffer *cb);
 void cmp_const_arg(SEXP a, CodeBuffer *cb, CompilerContext *cntxt);
-void cb_putcode(CodeBuffer *cb, int opcode);
-int cb_getcode(CodeBuffer *cb, int pos);
-int cb_putconst(CodeBuffer *cb, SEXP item);
-SEXP cb_getconst(CodeBuffer *cb, int idx);
+
+SEXP cmpfun(SEXP f, void* __placeholder__);
+
+// Weird ahh functions
+bool find_var(SEXP var, CompilerContext *cntxt);
+SEXP find_locals(SEXP expr, SEXP known_locals);
+SEXP find_locals_list(SEXP elist, SEXP known_locals);
+SEXP gen_code(SEXP e, CompilerContext *cntxt, SEXP gen, Loc loc);
+SEXP get_assigned_var(SEXP var);
 bool may_call_browser(SEXP expr, CompilerContext *cntxt);
 bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt);
-void cmp(SEXP e, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok, bool setloc);
-SEXP cmpfun(SEXP f, void* __placeholder__);
 SEXP is_compiled(SEXP fun);
 void R_init_crbcc(DllInfo* dll);
 VarInfo find_cenv_var( SEXP var, CompilerEnv * cenv );
@@ -214,6 +253,127 @@ static SEXP R_bcVersion();
 static bool is_in_set(SEXP sym, SEXP set);
 static SEXP union_sets(SEXP a, SEXP b);
 
+void cb_putswitch(CodeBuffer *cb, int *label_ids, int count) {
+
+  cb_putcode(cb, SWITCH_OP); // TODO switch opcode
+
+  int patch_pos = cb->code_count; // Position to patch later, placing into SwitchPatch struct
+  cb_putcode(cb, 0); // Placeholder
+
+  SwitchPatch * patch = (SwitchPatch *) R_alloc (1, sizeof( SwitchPatch ));
+  patch->cb_index = patch_pos;
+  patch->count = count;
+
+  patch->label_ids = (int *) R_alloc ( count, sizeof( int ) );
+  memcpy( patch->label_ids, label_ids, count * sizeof( int ) );
+
+  if ( cb->switch_patches == NULL ) {
+    cb->switch_patches = patch;
+    patch->next = NULL;
+  } else {
+    patch->next = cb->switch_patches;
+    cb->switch_patches = patch;
+  }
+
+};
+
+void ensure_label_capacity(LabelTable *lt, int needes_index) {
+
+  if ( needes_index < lt->capacity ) {
+    return; // Enough capacity
+  }
+
+  int old_cap = lt->capacity;
+  int* old_table = lt->table;
+
+  int new_cap = old_cap == 0 ? 16 : old_cap * 2;
+
+  while ( needes_index >= new_cap ) {
+    new_cap *= 2;
+  }
+
+  lt->table = (int *) R_alloc ( new_cap, sizeof( int ) );
+  lt->capacity = new_cap;
+
+  // Initialize new entries to -1 and copy old entries
+  for ( int i = 0; i < new_cap; i++ ) {
+    if ( i < old_cap ) {
+      lt->table[i] = old_table[i];
+    } else {
+      lt->table[i] = -1; // Unset
+    }
+  }
+
+};
+
+void cb_putlabel(CodeBuffer * cb, int label_id) {
+
+  size_t needed_index = (-(label_id + 1));
+  ensure_label_capacity(&cb->label_table, needed_index);
+
+  cb->label_table.table[needed_index] = cb->code_count;
+
+}
+
+int cb_makelabel(CodeBuffer * cb) {
+
+  cb->label_table.labels_issued++;
+  int label_id = cb->label_table.labels_issued;
+
+  return label_id;
+
+}
+
+void cb_patchlabels(CodeBuffer * cb) {
+
+  for ( int i = 0; i < cb->code_count; i++ ) {
+
+    int code = cb->code[i];
+    // Negative value indicates a label reference
+    if ( code < 0 ) {
+      // Convert to index
+      int needed_index = (-(code + 1));
+      
+      if ( needed_index >= cb->label_table.capacity )
+        Rf_error("Unresolved label reference: %d", code);
+      
+      int table_result = cb->label_table.table[needed_index];
+    
+      if ( table_result == -1 )
+        Rf_error("Unresolved label reference: %d", code);
+      
+      cb->code[i] = table_result;
+    
+    }
+  }
+
+  // Patch switch statement patches
+  SwitchPatch * patch = cb->switch_patches;
+  while ( patch ) {
+
+    SEXP offset_table = PROTECT(Rf_allocVector( INTSXP, patch->count ));
+
+    for (int i = 0; i < patch->count; i++) {
+        
+      int label_index = patch->label_ids[i];
+      INTEGER(offset_table)[i] = cb->label_table.table[label_index];
+      // NOTE: here, the conversion from negative doesnt happen. It only happens
+      // when extracting from code buffer, because there it would clash with actual opcodes.
+      // Here its a separate structure.
+
+      // TODO check for unresolved labels
+
+    }
+    
+    int idx = cb_putconst(cb, offset_table);
+    cb->code[patch->cb_index] = idx;
+    patch = patch->next;
+
+    UNPROTECT(1); // offset_table
+
+  }
+
+}
 
 SEXP extract_srcref(SEXP sref, int idx) {
 
@@ -322,15 +482,15 @@ SEXP check_call(SEXP def, SEXP call) {
 
   for (SEXP runner = CDR(call); runner != R_NilValue; runner = CDR(runner)) {
     SEXP arg = CAR(runner);
-      if (TYPEOF(arg) == SYMSXP && arg == R_DotsSymbol) {
-          has_dots = 1;
-          break;
-      }
+    if (TYPEOF(arg) == SYMSXP && arg == R_DotsSymbol) {
+      has_dots = 1;
+      break;
+    }
   }
 
   // if (typeof(def) != "closure" || anyDots(call)) NA
   if (TYPEOF(def) != CLOSXP || has_dots) {
-      return ScalarLogical(NA_LOGICAL);
+    return ScalarLogical(NA_LOGICAL);
   }
 
   // Construct call: match.call(def, call)
@@ -344,19 +504,20 @@ SEXP check_call(SEXP def, SEXP call) {
 
   if (errorOccurred) {
 
-      // Get deparsed call string for the warning message
-      SEXP dep_call = PROTECT(lang3(install("deparse"), call, ScalarInteger(20)));
-      SEXP dep_res = R_tryEval(dep_call, R_NilValue, NULL);
-      const char *call_str = "call";
-      if (TYPEOF(dep_res) == STRSXP && LENGTH(dep_res) > 0) {
-          call_str = CHAR(STRING_ELT(dep_res, 0));
-      }
+    // Get deparsed call string for the warning message
+    SEXP dep_call = PROTECT(lang3(install("deparse"), call, ScalarInteger(20)));
+    SEXP dep_res = R_tryEval(dep_call, R_NilValue, NULL);
+    const char *call_str = "call";
+    if (TYPEOF(dep_res) == STRSXP && LENGTH(dep_res) > 0) {
+        call_str = CHAR(STRING_ELT(dep_res, 0));
+    }
 
-      // Signal the warning (equivalent to 'signal(emsg)')
-      warning("possible error in '%s'", call_str);
+    // Signal the warning (equivalent to 'signal(emsg)')
+    warning("possible error in '%s'", call_str);
 
-      UNPROTECT(1); // dep_call
-      return ScalarLogical(0); // FALSE
+    UNPROTECT(1); // dep_call
+    return ScalarLogical(0); // FALSE
+  
   }
 
   return ScalarLogical(1);
@@ -882,10 +1043,12 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
   cb->constant_pool = R_NilValue; // Empty list
   cb->const_count = 0;
 
-  // TODO initialize label table
-  cb->label_table = NULL;
-  cb->const_capacity = 0; 
-  cb->label_generator_id = 0;
+  cb->switch_patches = NULL;
+
+  // Initialize label table
+  LabelTable lt;
+  lt.capacity = 0;
+  lt.labels_issued = 0;
 
   // Initialize source tracking
   cb->expr_buf = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
