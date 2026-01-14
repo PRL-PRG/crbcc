@@ -105,6 +105,14 @@ typedef struct CompilerEnv {
 
 } CompilerEnv;
 
+typedef struct LabelTable {
+
+  int *table;                      // Dynamic array of labels, ID corresponds to index
+  int capacity;                       // Array capacity
+  int labels_issued;               // Number of labels issued so far
+
+} LabelTable;
+
 typedef struct CodeBuffer {
 
   // Instruction stream
@@ -119,7 +127,7 @@ typedef struct CodeBuffer {
   int const_capacity;             // Capacity of the constant pool
 
   // Label management
-  LabelTable label_table;
+  struct LabelTable label_table;
 
   // Source tracking
   int * expr_buf;                  // Buffer for expressions
@@ -135,20 +143,12 @@ typedef struct CodeBuffer {
 
 } CodeBuffer;
 
-typedef struct LabelTable {
-
-  int *table;                      // Dynamic array of labels, ID corresponds to index
-  int capacity;                       // Array capacity
-  int labels_issued;               // Number of labels issued so far
-
-} LabelTable;
-
 typedef struct SwitchPatch {
 
   int cb_index;                   // Position in code buffer to patch
   int *label_ids;                 // Array of label IDs to jump to
   int count;                      // Number of label IDs
-  SwitchPatch *next;              // Next patch in linked list
+  struct SwitchPatch *next;       // Next patch in linked list
 
 } SwitchPatch;
 
