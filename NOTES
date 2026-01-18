@@ -1,0 +1,4 @@
+* The C compiler uses a handle for keeping SEXPs safe throughout the entire execution. Whatt
+* The C compiler uses negative integers in the instruction buffer to identify labels to be patched
+* The C compiler accesses labels in O(1) unlike the R compiler which does it in O(n) also on some stringslop
+* The C compiler really doesnt like how switch statements are handles. Wtf do you mean the code buffer can contain a list??  get a job

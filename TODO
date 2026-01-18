@@ -3,8 +3,11 @@
 * Add constant folding
 * Add inlining
 
-
-rewrite TYPEOF(x) == TYPE to Rf_isType
+Stylistic nuances:
+* rewrite TYPEOF(x) == TYPE to Rf_isType
+* make a toolking for working with generic vectors this resizing is annoying
 
 optimization note: sometimes i think the compiler now uses Rs internal functions / data types,
 when it could be using its own representations. This is not ideal
+
+Install builtin and special on startup idkkkk

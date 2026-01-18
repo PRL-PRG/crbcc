@@ -29,8 +29,19 @@ extern SEXP R_FalseValue;
 #define DODOTS_OP 32
 #define DDVAL_MISSOK_OP 93
 #define SWITCH_OP 102
+#define BASEGUARD_OP 123
+#define POP_OP 4
+#define MAKECLOSURE_OP 41
+#define GETINTLBUILTIN_OP 27
+#define GETBUILTIN_OP 26
+#define CALLBUILTIN_OP 39
+#define VISIBLE_OP 94
+#define PUSHARG_OP 33
+#define GETVAR_MISSOK_OP 92
+#define RETURNJMP_OP 103
+#define CALLSPECIAL_OP 40
 
-// #define DEBUG 
+#define DEBUG 
 
 #ifdef DEBUG
 #define DEBUG_PRINT(...) Rprintf(__VA_ARGS__)
@@ -108,7 +119,7 @@ typedef struct CompilerEnv {
 typedef struct LabelTable {
 
   int *table;                      // Dynamic array of labels, ID corresponds to index
-  int capacity;                       // Array capacity
+  int capacity;                    // Array capacity
   int labels_issued;               // Number of labels issued so far
 
 } LabelTable;
@@ -162,10 +173,30 @@ typedef struct VarInfo {
 
 // in the original compiler loc = list(expr, srcref)
 typedef struct Loc {
-    bool is_null;
-    SEXP expr;
-    SEXP srcref;
+  bool is_null;
+  SEXP expr;
+  SEXP srcref;
 } Loc;
+
+typedef bool (*HandlerFn)(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+
+typedef struct InlineHandler {
+
+  char func_name[256];            // Name of the function being inlined
+  HandlerFn handler;              // Function pointer to the inlining handler
+
+} InlineHandler;
+
+typedef struct InlineInfo {
+
+  SEXP env;                       // Environment where the function is defined
+  
+  bool can_inline;                // Can this function be inlined
+  bool guard_needed;              // Is a type guard needed
+
+  char package[256];              // Package name
+
+} InlineInfo;
 
 // TODO here maybe should add InlineHandler structs for managing inlining of functions
 // TODO label table
@@ -221,7 +252,7 @@ void add_cenv_frame(CompilerEnv *cenv, SEXP vars);
 void cmp(SEXP e, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok, bool setloc);
 void cmp_const(SEXP val, CodeBuffer *cb, CompilerContext *cntxt);
 void cmp_sym(SEXP sym, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok);
-void cmp_call(SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
+void cmp_call(SEXP call, CodeBuffer *cb, CompilerContext *cntxt, bool inline_ok);
 void cmp_call_sym_fun(SEXP fun, SEXP args, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
 void cmp_call_expr_fun(SEXP fun, SEXP args, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
 void cmp_call_args(SEXP args, CodeBuffer *cb, CompilerContext *cntxt, bool nse);
@@ -246,6 +277,18 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt );
 bool is_ddsym(SEXP sym);
 SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt );
 SEXP check_call( SEXP def, SEXP call );
+bool any_dots( SEXP args );
+
+// Inlining
+bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+InlineInfo get_inline_info( char name[256], CompilerContext * cntxt, bool guard_ok );
+bool get_inline_handler( char name[256], char package[256], HandlerFn * found );
+void pack_frame_name(EnvFrame * frame, char out[256] );
+
+// The actual inlining handlers
+bool inline_left_brace( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 
 static bool is_base_var(SEXP sym, CompilerContext *cntxt);
 
@@ -253,9 +296,474 @@ static SEXP R_bcVersion();
 static bool is_in_set(SEXP sym, SEXP set);
 static SEXP union_sets(SEXP a, SEXP b);
 
+SEXP constant_fold(SEXP e, CompilerContext* cntxt, Loc loc);
+
+static bool is_in_c_set(const char *str, const char *set[]) {
+  if (str == NULL) return false;
+    
+  for (int i = 0; set[i] != NULL; i++) {
+    if (strcmp(str, set[i]) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static const char *const_names[] = {
+    "pi", "T", "F", 
+    NULL
+};
+
+static const char *fold_funs[] = {
+    "+", "-", "*", "/", "^", "(",
+    ">", ">=", "==", "!=", "<", "<=", "||", "&&", "!",
+    "|", "&", "%%",
+    "c", "rep", ":",
+    "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2",
+    "atanh", "ceiling", "choose", "cos", "cosh", "exp", "expm1",
+    "floor", "gamma", "lbeta", "lchoose", "lgamma", "log", "log10",
+    "log1p", "log2", "max", "min", "prod", "range", "round",
+    "seq_along", "seq.int", "seq_len", "sign", "signif",
+    "sin", "sinh", "sqrt", "sum", "tan", "tanh", "trunc",
+    "baseenv", "emptyenv", "globalenv",
+    "Arg", "Conj", "Im", "Mod", "Re",
+    NULL
+};
+
+static bool is_const_mode(SEXP e) {
+
+  SEXPTYPE t = TYPEOF(e);
+  return (t == INTSXP || t == REALSXP || t == LGLSXP
+          || t == NILSXP || t == CPLXSXP || t == STRSXP);
+
+};
+
+SEXP check_const(SEXP e) {
+
+  const int MAX_CONST_SIZE = 10;
+
+  if ( is_const_mode(e) && Rf_length(e) <= MAX_CONST_SIZE ) {
+
+    SEXP res = PROTECT(Rf_allocVector( VECSXP, 1 ));
+    SET_VECTOR_ELT( res, 0, e );
+
+    UNPROTECT(1); // res
+    return res;
+
+  }
+
+  return R_NilValue;
+
+};
+
+static SEXP constant_fold_sym( SEXP var, CompilerContext * cntxt ) {
+
+  if ( is_in_c_set(CHAR(PRINTNAME(var)), const_names) && is_base_var(var, cntxt) ) {
+
+    SEXP val = Rf_findVar( var, R_BaseNamespace );
+
+    if ( Rf_isFunction( val ) ) {
+      return val;
+    }
+
+  }
+
+  return R_NilValue;
+
+};
+
+static SEXP get_fold_fun(SEXP var, CompilerContext *cntxt) {
+
+  if ( is_in_c_set( CHAR(PRINTNAME(var)), fold_funs ) && is_base_var( var, cntxt ) ) {
+
+    SEXP val = Rf_findVar( var, R_BaseNamespace );
+
+    if ( Rf_isFunction(val) )
+      return val;
+
+  }
+
+  return R_NilValue;
+
+};
+
+
+//  !!!!!!!!! TODO dangerous
+static SEXP constant_fold_call(SEXP e, CompilerContext *cntxt) {
+    
+  SEXP fun = CAR(e);
+    
+    // if (typeof(fun) == "symbol")
+    if (TYPEOF(fun) == SYMSXP) {
+        
+        // ffun <- getFoldFun(fun, cntxt)
+        SEXP ffun = get_fold_fun(fun, cntxt);
+        
+        // if (! is.null(ffun))
+        if (ffun != R_NilValue) {
+            
+            // First pass: Count arguments to allocate storage
+            int n_args = 0;
+            for (SEXP s = CDR(e); s != R_NilValue; s = CDR(s)) {
+                n_args++;
+            }
+
+            // Allocate temporary storage for folded values and their names (tags)
+            // We use VECSXP to hold them safely during processing
+            SEXP folded_values = PROTECT(allocVector(VECSXP, n_args));
+            SEXP arg_tags = PROTECT(allocVector(VECSXP, n_args));
+            
+            int i = 0;
+            bool ok = true;
+            
+            // Iterate original arguments: fold and store
+            for (SEXP s = CDR(e); s != R_NilValue; s = CDR(s), i++) {
+                SEXP a = CAR(s);
+                SEXP tag = TAG(s);
+                
+                // if (missing(a)) ...
+                if (a == R_MissingArg) {
+                    ok = false; 
+                    break;
+                }
+                
+                // val <- constantFold(a, cntxt)
+                Loc null_loc = {0}; 
+                SEXP val_wrapper = constant_fold(a, cntxt, null_loc);
+                
+                if (val_wrapper != R_NilValue) {
+                    // Extract value from list(value=...) wrapper
+                    SEXP val = VECTOR_ELT(val_wrapper, 0);
+                    
+                    // Check mode immediately to save work
+                    if (!is_const_mode(val)) {
+                        ok = false;
+                        break;
+                    }
+                    
+                    SET_VECTOR_ELT(folded_values, i, val);
+                    SET_VECTOR_ELT(arg_tags, i, tag); // Store original name
+                } else {
+                    ok = false;
+                    break;
+                }
+            }
+            
+            if (ok) {
+                // Construct the new call (ffun val1 val2 ...)
+                // We must build it backwards: (val_last) -> (val_n-1, val_last) ...
+                
+                SEXP new_call = R_NilValue;
+                
+                // 1. Build the argument list from back to front
+                for (int j = n_args - 1; j >= 0; j--) {
+                    SEXP val = VECTOR_ELT(folded_values, j);
+                    SEXP tag = VECTOR_ELT(arg_tags, j);
+                    
+                    // LCONS creates a new LANGSXP node with CAR=val, CDR=new_call
+                    new_call = LCONS(val, new_call);
+                    
+                    // Restore the argument name if it existed
+                    if (tag != R_NilValue) {
+                        SET_TAG(new_call, tag);
+                    }
+                }
+                
+                // 2. Prepend the function itself
+                new_call = LCONS(ffun, new_call);
+                
+                // Protect the constructed call
+                PROTECT(new_call);
+                
+                // Execute
+                int error = 0;
+                SEXP result = R_tryEval(new_call, R_BaseEnv, &error);
+                
+                UNPROTECT(1); // new_call
+                UNPROTECT(2); // folded_values, arg_tags
+                
+                if (!error) {
+                    return check_const(result);
+                } else {
+                    return R_NilValue;
+                }
+            }
+            
+            UNPROTECT(2); // folded_values, arg_tags
+            return R_NilValue;
+        }
+    }
+    
+    return R_NilValue;
+}
+
+
+static bool dots_or_missing(SEXP args) {
+  for (SEXP s = args; s != R_NilValue; s = CDR(s)) {
+    SEXP val = CAR(s);
+    if (val == R_DotsSymbol || val == R_MissingArg) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
+SEXP constant_fold(SEXP e, CompilerContext* cntxt, Loc loc) {
+
+  SEXPTYPE type = TYPEOF(e);
+
+  switch (type)
+  {
+  case LANGSXP:
+    return constant_fold_call(e, cntxt);
+  
+  case SYMSXP:
+    return constant_fold_sym(e, cntxt);
+
+  case PROMSXP:
+    return R_NilValue;
+
+  case BCODESXP:
+    return R_NilValue;
+
+  default:
+    return check_const(e);
+  
+  }
+
+};
+
+
+void cmp_special(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  SEXP fun = CAR(e);
+
+  if ( TYPEOF(fun) == CHARSXP ) {
+    fun = Rf_install( CHAR( fun ) ); //TODO protect?
+  }
+
+  int ci = cb_putconst( cb, fun );
+  cb_putcode( cb, CALLSPECIAL_OP );
+
+  if (  cntxt->tailcall )
+    cb_putcode( cb, RETURN_OP );
+
+};
+
+
+void cmp_builtin_args(SEXP args, CodeBuffer *cb, CompilerContext *cntxt, bool missingOK) {
+    
+  CompilerContext * ncntxt = make_arg_ctx( cntxt );
+
+  for (SEXP s = args; s != R_NilValue; s = CDR(s)) {
+        
+    SEXP a = CAR(s);  // The argument value (args[[i]])
+    SEXP n = TAG(s);  // The argument name  (names[[i]]) TODO check
+
+    if (a == R_MissingArg) {
+      if (missingOK) {
+        cb_putcode(cb, DOMISSING_OP);
+        cmp_tag(n, cb);
+      } 
+      else {
+        // cntxt$stop(gettext("missing arguments are not allowed"), ...)
+        Loc loc = cb_savecurloc(cb);
+        exit(1); //TODO correct kill
+        // compiler_stop(cntxt, "missing arguments are not allowed", loc);
+      }
+  } else {
+
+    if (TYPEOF(a) == SYMSXP) {
+        // ca <- constantFold(a, cntxt, loc = cb$savecurloc())
+        Loc loc = cb_savecurloc(cb);
+        SEXP ca = constant_fold(a, cntxt, loc);
+
+        if (ca == R_NilValue) {
+          cmp_sym(a, cb, ncntxt, missingOK);
+          cb_putcode(cb, PUSHARG_OP);
+        } else {
+          // TODO constant folded to a constant?
+          SEXP ca_value = VECTOR_ELT(ca, 0); 
+          cmp_const_arg(ca_value, cb, cntxt);
+        }
+    }
+
+    else if (TYPEOF(a) == LANGSXP) {
+      cmp(a, cb, ncntxt, false, true);        
+      cb_putcode(cb, PUSHARG_OP);
+    }
+
+    else {
+      cmp_const_arg(a, cb, cntxt);
+    }
+
+    cmp_tag(n, cb);
+  }
+
+  }
+
+}
+
+
+bool cmp_builtin( SEXP e, CodeBuffer *cb, CompilerContext *cntxt, bool internal ) {
+  SEXP fun = CAR( e );
+  SEXP args = CDR( e );
+
+  if ( dots_or_missing( args ) ) {
+    
+    return false;
+
+  } else {
+
+    int ci = cb_putconst( cb, fun );
+
+    if (internal)
+      cb_putcode( cb, GETINTLBUILTIN_OP );
+    else
+      cb_putcode( cb, GETBUILTIN_OP );
+    
+    cb_putcode( cb, ci );
+  
+    cmp_builtin_args( args, cb, cntxt, false );
+    ci = cb_putconst( cb, e );
+
+    cb_putcode( cb, CALLBUILTIN_OP );
+    cb_putcode( cb, ci );
+
+    if ( cntxt->tailcall )
+      cb_putcode( cb, RETURN_OP );
+    
+    return true;
+  }
+
+}
+
+
+bool any_dots( SEXP args ) {
+
+  for ( SEXP s = args; s != R_NilValue; s = CDR( s ) ) {
+    SEXP arg = CAR( s );
+    if ( arg != R_MissingArg && arg == R_DotsSymbol ) {
+      return true;
+    }
+  }
+  return false;
+
+};
+
+
+InlineInfo get_inline_info( char name[256], CompilerContext * cntxt, bool guard_ok ) {
+/*
+  InlineInfo ret;
+  ret.can_inline = false;
+
+  short optimize = cntxt->optimize_level;
+  SEXP name_wrapped = PROTECT(Rf_mkChar( name ));
+
+  if ( optimize > 0 && ! ( is_in_set( name_wrapped, R_NilValue ) ) ) {
+
+    VarInfo info = find_cenv_var( name_wrapped, cntxt->env );
+    if ( ! info.found )
+      return ret;
+
+    EnvFrame * defining_frame = info.defining_frame;
+    FrameType ftype = defining_frame->type;
+
+    //if ( ftype == FRAME_NAMESPACE )
+    if ( R_IsNamespaceEnv( defining_frame->r_env ) ) {
+
+      SEXP top_level_env = cntxt->env->top_frame->r_env;
+      if ( ! R_IsNamespaceEnv( top_level_env ) ||
+           ! IDENTICAL( defining_frame->r_env, R_ParentEnv( top_level_env ) )) {
+             //context stop idk
+
+           }
+
+      defining_frame = cntxt->env->top_frame;
+
+    }
+
+    ret.package = ///// LEFT OF HERE
+
+  }
+
+  UNPROTECT(1); //name_wrapped
+  return ret;*/
+
+  InlineInfo ret;
+  ret.can_inline = true;
+  ret.guard_needed = false;
+  strncpy(ret.package, "base\0", 5);
+
+  return ret;
+};
+
+
+bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  char name[256];
+  strncpy( name, CHAR(PRINTNAME(CAR(e))), 255 );
+  
+  InlineInfo info = get_inline_info( name, cntxt, true );
+
+  if ( ! info.can_inline )
+    return false;
+
+  HandlerFn handler = NULL;
+
+  if( ! get_inline_handler( name, info.package, &handler ) )
+    return false;
+
+  DEBUG_PRINT(">> Inlining function '%s' from package '%s'\n", name, info.package);
+
+  if ( info.guard_needed ) {
+
+    bool tailpos = cntxt->tailcall;
+    if ( tailpos ) cntxt->tailcall = false;
+
+    int expridx = cb_putconst( cb, e );
+    int endlabel = cb_makelabel( cb );
+    cb_putcode( cb, BASEGUARD_OP );
+    cb_putcode( cb, expridx );
+    cb_putcode( cb, endlabel );
+    if (! handler(e, cb, cntxt))
+      cmp_call(e, cb, cntxt, false);
+
+    cb_putlabel(cb, endlabel);
+    if ( tailpos ) cb_putcode(cb, RETURN_OP);
+    return true;
+  
+  }
+  
+  return handler( e, cb, cntxt );
+
+};
+
+bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) {
+
+  // Macro to reduce boilerplate for handler assignment
+#define INLINE_HANDLER_CASE(NAMESTR, FN) \
+    if (strcmp(name, NAMESTR) == 0) { \
+      *found = &FN; \
+      return true; \
+    }
+
+  if (strcmp(package, "base") == 0) {
+    INLINE_HANDLER_CASE("{", inline_left_brace)
+    INLINE_HANDLER_CASE("function", inline_function)
+    INLINE_HANDLER_CASE("return", inline_return)
+  }
+
+  return false;
+
+#undef INLINE_HANDLER_CASE
+}
+
+// TODO check heavy
 void cb_putswitch(CodeBuffer *cb, int *label_ids, int count) {
 
-  cb_putcode(cb, SWITCH_OP); // TODO switch opcode
+  cb_putcode(cb, SWITCH_OP);
 
   int patch_pos = cb->code_count; // Position to patch later, placing into SwitchPatch struct
   cb_putcode(cb, 0); // Placeholder
@@ -1061,16 +1569,6 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
 
 };
 
-void dloc(SEXP e, CodeBuffer * cb) {
-
-  SEXP srcref = Rf_getAttrib(e, Rf_install("srcref"));
-  cb->current_expr = e;
-
-  // TODO
-  cb->current_srcref = srcref;
-
-}
-
 // @manual 2.4
 void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
 
@@ -1083,8 +1581,8 @@ void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
   else if ( IDENTICAL( val, R_FalseValue ) )
     cb_putcode( cb, LDFALSE_OP );
   else {
-    cb_putcode( cb, LDCONST_OP );
     int ci = cb_putconst( cb, val ); 
+    cb_putcode( cb, LDCONST_OP );
     cb_putcode( cb, ci );
   }
 
@@ -1131,8 +1629,12 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_o
   }
   
   int poolref = cb_putconst( cb, sym );
-  // TODO if missing ok
-  cb_putcode( cb, GETVAR_OP );
+
+  if ( missing_ok )
+    cb_putcode( cb, GETVAR_MISSOK_OP );
+  else
+    cb_putcode( cb, GETVAR_OP );
+
   cb_putcode( cb, poolref );
 
   if ( cntxt->tailcall )
@@ -1142,7 +1644,7 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_o
 
 // @manual 2.6
 // TODO add inlineOK argument
-void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
+void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_ok ) {
 
   DEBUG_PRINT("++ cmp_call: Compiling function call\n");
   
@@ -1155,11 +1657,7 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
 
   if ( TYPEOF( fun ) == SYMSXP ) {
     
-    if ( false ) {
-
-      // TODO inline function here
-
-    } else {
+    if ( ! ( inline_ok && try_inline( call, cb, cntxt ) ) ) {
 
       // If not inlinable:
       DEBUG_PRINT("++ cmp_call: Calling symbol function '%s'\n", CHAR(PRINTNAME(fun)));
@@ -1538,8 +2036,7 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
     cb_setcurexpr(cb, e);
   }
 
-  // TODO constant fold here (ce means constant expression i guess)
-  SEXP ce = R_NilValue;
+  SEXP ce = constant_fold( e, cntxt, cb_savecurloc( cb ) );
   
   if ( Rf_isNull( ce ) ) {
 
@@ -1552,7 +2049,7 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
     
     case LANGSXP:
       DEBUG_PRINT(".. cmp: Compiling Call (LANGSXP)\n");
-      cmp_call( e, cb, cntxt );
+      cmp_call( e, cb, cntxt, true );
       break;
     
     case SYMSXP:
@@ -1578,8 +2075,9 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
 
     }
 
-  } else
-    cmp_const( ce, cb, cntxt );
+  } else {
+    cmp_const( VECTOR_ELT(ce, 0), cb, cntxt );
+  }
 
   // Restore previous location
   if ( setloc )
@@ -1801,3 +2299,148 @@ void R_init_crbcc(DllInfo* dll) {
 
   BCVersion = Rf_asInteger(R_bcVersion());
 }
+
+
+// Inline brusle
+bool inline_left_brace( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  DEBUG_PRINT("[_] Inlining left brace function");
+
+  int n = Rf_length( e );
+  if ( n == 1 ) {
+    cmp( R_NilValue, cb, cntxt, false, true );
+  } else {
+    Loc sloc = cb_savecurloc(cb);
+    SEXP bsrefs = Rf_getAttrib( e , Rf_install("srcref") );
+
+    SEXP runner = CDR( e );
+
+    if ( n > 2 ) {
+
+      CompilerContext * ncntxt = make_no_value_ctx(cntxt);
+
+      for (int i = 2; i < n; i++) {
+
+        SEXP subexp = CAR( runner );
+
+        cb_setcurloc(cb, subexp, get_block_srcref(bsrefs, i));
+        cmp( subexp, cb, ncntxt, false, false );
+        cb_putcode( cb, POP_OP );
+
+        runner = CDR( runner );
+
+      }
+
+    }
+
+    SEXP subexp = CAR( runner );
+    cb_setcurloc( cb, subexp, get_block_srcref( bsrefs, n ) );
+    cmp( subexp, cb, cntxt, false, false );
+    cb_restorecurloc(cb,sloc);
+
+  }
+
+
+  return true;
+
+};
+
+bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  DEBUG_PRINT("[_] Inlining function definition");
+
+  SEXP formals = CADR( e );
+  SEXP body = CDDR( e );
+
+  SEXP sref = R_NilValue;
+
+  if ( length(e) > 3)
+    sref = CADDDR( e );
+
+  CompilerContext * ncntxt = make_function_ctx( cntxt, cntxt->env, formals, body );
+
+  if ( may_call_browser( body, ncntxt ) ) {
+    DEBUG_PRINT("!! inline_function_handler: Function may call browser, skipping inlining\n");
+    return false;
+  }
+
+  Loc loc = cb_savecurloc( cb );
+  SEXP cbody = gen_code( body, ncntxt, R_NilValue, loc );
+  PROTECT( cbody );
+
+
+  SEXP const_list = PROTECT( Rf_allocVector( VECSXP, 3 ) );
+  SET_VECTOR_ELT( const_list, 0, formals );
+  SET_VECTOR_ELT( const_list, 1, cbody );
+  SET_VECTOR_ELT( const_list, 2, sref );
+
+  int ci = cb_putconst( cb, const_list );
+
+  cb_putcode( cb, MAKECLOSURE_OP );
+  cb_putcode( cb, ci );
+
+  if ( cntxt->tailcall )
+    cb_putcode( cb, RETURN_OP );
+
+  UNPROTECT(2); // body, const_list
+  return true;
+
+};
+
+bool inline_left_parenthesis( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  DEBUG_PRINT("[_] Inlining left parenthesis function");
+
+  // TODO when these functions are implemented
+  if ( any_dots(e) )
+    return cmp_builtin( e, cb, cntxt, false );
+
+  if ( length(e) != 2 ) {
+
+    Loc loc = cb_savecurloc(cb);
+    //TODO notify_wrong_arg_count( "(", cntxt, loc );
+    return cmp_builtin( e, cb, cntxt, false );
+  }
+
+  if ( cntxt->tailcall ) {
+
+    CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
+    cmp( CADR( e ), cb, ncntxt, false, true );
+    cb_putcode( cb, VISIBLE_OP );
+    cb_putcode( cb, RETURN_OP );
+    
+    return true;
+  }
+
+  cmp( CADR( e ), cb, cntxt, false, true );
+  return true;
+
+};
+
+bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  if ( dots_or_missing(e) || length(e) > 2 ) {
+    cmp_special( e, cb, cntxt );
+    return true;
+  }
+
+  SEXP ret_expr;
+
+  if ( length(e) == 1 ) {
+    ret_expr = R_NilValue;
+  } else {
+    ret_expr = CADR( e );
+  }
+
+  CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
+  cmp( ret_expr, cb, ncntxt, false, true );
+
+  if ( cntxt->need_return_jmp ) {
+    cb_putcode( cb, RETURNJMP_OP );
+  } else {
+    cb_putcode( cb, RETURN_OP );
+  }
+
+  return true;
+
+};
