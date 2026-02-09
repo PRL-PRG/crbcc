@@ -1,11 +1,30 @@
+#pragma region Headers
+
 #include <R.h>
 #include <Rdefines.h>
 #include <R_ext/Rdynload.h>
 #include <Rinternals.h>
 #include <ctype.h>
 
+//#define DEBUG
+
 extern SEXP R_TrueValue;
 extern SEXP R_FalseValue;
+extern SEXP R_mkClosure(SEXP formals, SEXP body, SEXP env);
+
+static int BCVersion;
+
+#ifdef DEBUG
+#define DEBUG_PRINT(...) Rprintf(__VA_ARGS__)
+#else
+#define DEBUG_PRINT(...) do {} while (0)
+#endif
+
+#define IDENTICAL(x,y) R_compute_identical(x, y, 0)
+
+#pragma endregion
+
+#pragma region Opcodes
 
 // Opcode Definitions
 #define RETURN_OP 1
@@ -40,22 +59,25 @@ extern SEXP R_FalseValue;
 #define GETVAR_MISSOK_OP 92
 #define RETURNJMP_OP 103
 #define CALLSPECIAL_OP 40
+#define SETVAR_OP 22
+#define INVISIBLE_OP 15
+#define BRIFNOT_OP 3
+#define GOTO_OP 2
+#define AND1ST_OP 88
+#define AND2ND_OP 89
+#define OR1ST_OP 90
+#define OR2ND_OP 91
+#define STARTLOOPCNTXT_OP 7
+#define ENDLOOPCNTXT_OP 8
+#define DOLOOPNEXT_OP 9
+#define DOLOOPBREAK_OP 10
+#define STARTFOR_OP 11
+#define STEPFOR_OP 12
+#define ENDFOR_OP 13
 
-#define DEBUG 
+#pragma endregion
 
-#ifdef DEBUG
-#define DEBUG_PRINT(...) Rprintf(__VA_ARGS__)
-#else
-#define DEBUG_PRINT(...) do {} while (0)
-#endif
-
-
-#define IDENTICAL(x,y) R_compute_identical(x, y, 0)
-
-static int BCVersion;
-
-extern SEXP R_mkClosure(SEXP formals, SEXP body, SEXP env);
-
+#pragma region Data Structures
 
 typedef struct CompilerContext {
 
@@ -198,12 +220,9 @@ typedef struct InlineInfo {
 
 } InlineInfo;
 
-// TODO here maybe should add InlineHandler structs for managing inlining of functions
-// TODO label table
-// TODO compile() function
+#pragma endregion
 
-// Forward declarations for all defined functions
-// because the compiler keeps yelling at me
+#pragma region o0 Function Declarations
 
 //  === CODE BUFFER FUNCTIONS ===
 CodeBuffer *make_code_buffer(SEXP preseed, Loc loc);
@@ -285,10 +304,26 @@ InlineInfo get_inline_info( char name[256], CompilerContext * cntxt, bool guard_
 bool get_inline_handler( char name[256], char package[256], HandlerFn * found );
 void pack_frame_name(EnvFrame * frame, char out[256] );
 
+#pragma endregion
+
+#pragma region Inline function declarations
+
 // The actual inlining handlers
 bool inline_left_brace( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool fake_inline_assign( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_left_parenthesis( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_and( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_or( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_repeat( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_next( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_break( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+
+#pragma endregion
+
+#pragma region o0
 
 static bool is_base_var(SEXP sym, CompilerContext *cntxt);
 
@@ -545,6 +580,7 @@ void cmp_special(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   int ci = cb_putconst( cb, fun );
   cb_putcode( cb, CALLSPECIAL_OP );
+  cb_putcode( cb, ci );
 
   if (  cntxt->tailcall )
     cb_putcode( cb, RETURN_OP );
@@ -740,25 +776,6 @@ bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
 };
 
-bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) {
-
-  // Macro to reduce boilerplate for handler assignment
-#define INLINE_HANDLER_CASE(NAMESTR, FN) \
-    if (strcmp(name, NAMESTR) == 0) { \
-      *found = &FN; \
-      return true; \
-    }
-
-  if (strcmp(package, "base") == 0) {
-    INLINE_HANDLER_CASE("{", inline_left_brace)
-    INLINE_HANDLER_CASE("function", inline_function)
-    INLINE_HANDLER_CASE("return", inline_return)
-  }
-
-  return false;
-
-#undef INLINE_HANDLER_CASE
-}
 
 // TODO check heavy
 void cb_putswitch(CodeBuffer *cb, int *label_ids, int count) {
@@ -814,13 +831,19 @@ void ensure_label_capacity(LabelTable *lt, int needes_index) {
 
 };
 
+// Set the jump target
 void cb_putlabel(CodeBuffer * cb, int label_id) {
 
-  size_t needed_index = (-(label_id + 1));
+  int needed_index = label_id;
   ensure_label_capacity(&cb->label_table, needed_index);
 
-  cb->label_table.table[needed_index] = cb->code_count;
+  cb->label_table.table[needed_index] = (cb->code_count) + 1;
 
+}
+
+// Set up the jump source
+void cb_putcodelabel(CodeBuffer * cb, int label_id) {
+  cb_putcode(cb, -(label_id + 1));
 }
 
 int cb_makelabel(CodeBuffer * cb) {
@@ -1473,8 +1496,8 @@ CompilerContext * make_loop_ctx( CompilerContext * cntxt, int loop_label, int en
   li->end_label_id = end_label;
   li->goto_ok = true;
 
-  cntxt->loop = li;
-  return cntxt;
+  ncntxt->loop = li;
+  return ncntxt;
 
 };
 
@@ -1557,6 +1580,9 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
   LabelTable lt;
   lt.capacity = 0;
   lt.labels_issued = 0;
+  lt.table = NULL;
+
+  cb->label_table = lt;
 
   // Initialize source tracking
   cb->expr_buf = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
@@ -2194,6 +2220,8 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
   DEBUG_PRINT("   Code size: %d\n", cb->code_count);
   DEBUG_PRINT("   Constant pool size: %d\n", cb->const_count);
 
+  cb_patchlabels(cb);
+
   SEXP code_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1 ) );
 
   if ( cb->srcref_tracking_on ) {
@@ -2300,6 +2328,37 @@ void R_init_crbcc(DllInfo* dll) {
   BCVersion = Rf_asInteger(R_bcVersion());
 }
 
+#pragma endregion
+
+bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) {
+
+  // Macro to reduce boilerplate for handler assignment
+#define INLINE_HANDLER_CASE(NAMESTR, FN) \
+    if (strcmp(name, NAMESTR) == 0) { \
+      *found = &FN; \
+      return true; \
+    }
+
+  if (strcmp(package, "base") == 0) {
+    INLINE_HANDLER_CASE("{", inline_left_brace)
+    INLINE_HANDLER_CASE("function", inline_function)
+    INLINE_HANDLER_CASE("return", inline_return)
+    INLINE_HANDLER_CASE("<-", fake_inline_assign)
+    INLINE_HANDLER_CASE("if", inline_if)
+    INLINE_HANDLER_CASE("(", inline_left_parenthesis)
+    INLINE_HANDLER_CASE("&&", inline_and)
+    INLINE_HANDLER_CASE("||", inline_or)
+    INLINE_HANDLER_CASE("repeat", inline_repeat)
+    INLINE_HANDLER_CASE("next", inline_next)
+    INLINE_HANDLER_CASE("break", inline_break)
+  }
+
+  return false;
+
+#undef INLINE_HANDLER_CASE
+}
+
+#pragma region Inline Handlers
 
 // Inline brusle
 bool inline_left_brace( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
@@ -2419,6 +2478,8 @@ bool inline_left_parenthesis( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
 bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
+  DEBUG_PRINT("[_] Inlining return");
+
   if ( dots_or_missing(e) || length(e) > 2 ) {
     cmp_special( e, cb, cntxt );
     return true;
@@ -2444,3 +2505,337 @@ bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   return true;
 
 };
+
+bool fake_inline_assign( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  DEBUG_PRINT("[_] Inlining assignment (beta)");
+
+  SEXP lhs = CADR( e );
+  SEXP rhs = CADDR( e );
+
+  if ( TYPEOF( lhs ) != SYMSXP ) {
+    // TODO notify_invalid_lhs_assign( cntxt, cb_savecurloc( cb ) );
+    return false;
+  }
+
+  CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
+  cmp( rhs, cb, ncntxt, false, true );
+
+  int sym_idx = cb_putconst( cb, lhs );
+  cb_putcode( cb, SETVAR_OP );
+  cb_putcode( cb, sym_idx );
+
+  if ( cntxt->tailcall ) {
+    cb_putcode( cb, INVISIBLE_OP );
+    cb_putcode( cb, RETURN_OP );
+  }
+
+
+  return true;
+
+};
+
+bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  DEBUG_PRINT("[_] Inlining if statement");
+  // **** TEST FOR MISSING **** //
+  SEXP test = CADR( e );
+  SEXP then = CADDR( e );
+  SEXP eelse = R_NilValue;
+
+  bool has_else = ( length(e) == 4 );
+  
+  if ( has_else ) {
+    eelse = CADDDR( e );
+  }
+
+  SEXP ct = constant_fold( test, cntxt, cb_savecurloc( cb ) );
+
+  if ( ! Rf_isNull(ct) ) {
+
+    SEXP value = VECTOR_ELT( ct, 0 );
+    // TODO ! isNA function
+    if (Rf_isLogical( value ) && length( value ) == 1) {
+
+      if ( asLogical( value ) ) {
+        cmp( then, cb, cntxt, false, true );
+      }
+      else if ( has_else ) {
+        cmp( eelse, cb, cntxt, false, true );
+      } else if (cntxt->tailcall) {
+
+        cb_putcode(cb, LDNULL_OP);
+        cb_putcode(cb, INVISIBLE_OP);
+        cb_putcode(cb, RETURN_OP);
+      
+      } else {
+        cb_putcode(cb, LDNULL_OP);
+      }
+
+      return true;
+
+    }
+
+  }
+
+  CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
+  cmp( test, cb, ncntxt, false, true );
+
+  int callidx = cb_putconst( cb, e );
+  int else_label = cb_makelabel( cb );
+
+  cb_putcode(cb, BRIFNOT_OP);
+  cb_putcode(cb, callidx);
+  cb_putcodelabel(cb, else_label);
+
+  cmp( then, cb, cntxt, false, true );
+
+  if ( cntxt->tailcall ) {
+
+    cb_putlabel( cb, else_label);
+
+    if ( has_else )
+      cmp( eelse, cb, cntxt, false, true);
+    else {
+      cb_putcode(cb, LDNULL_OP);
+      cb_putcode(cb, INVISIBLE_OP);
+      cb_putcode(cb, RETURN_OP);
+    }
+
+  } else {
+
+    int end_label = cb_makelabel(cb);
+    cb_putcode( cb, GOTO_OP );
+    cb_putcodelabel( cb, end_label );
+
+    cb_putlabel(cb, else_label);
+
+    if ( has_else )
+      cmp( eelse, cb, cntxt, false, true);
+    else
+      cb_putcode( cb, LDNULL_OP );
+
+    cb_putlabel( cb, end_label );
+
+  }
+
+  return true;
+
+};
+
+bool inline_and( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  CompilerContext * ncntxt = make_arg_ctx( cntxt );
+  int callidx = cb_putconst(cb, e);
+  int label = cb_makelabel(cb);
+
+  cmp(CADR(e), cb, ncntxt, false, true);
+
+  cb_putcode(cb, AND1ST_OP);
+  cb_putcode(cb, callidx);
+  cb_putcodelabel(cb, label);
+
+  cmp(CADDR(e), cb, ncntxt, false, true);
+
+  cb_putcode(cb, AND2ND_OP);
+  cb_putcode(cb, callidx);
+  cb_putlabel(cb, label);
+
+  if (cntxt->tailcall)
+      cb_putcode(cb, RETURN_OP);
+
+  return true;
+
+}
+
+bool inline_or( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  CompilerContext * ncntxt = make_arg_ctx( cntxt );
+  int callidx = cb_putconst(cb, e);
+  int label = cb_makelabel(cb);
+
+  cmp(CADR(e), cb, ncntxt, false, true);
+
+  cb_putcode(cb, OR1ST_OP);
+  cb_putcode(cb, callidx);
+  cb_putcodelabel(cb, label);
+
+  cmp(CADDR(e), cb, ncntxt, false, true);
+
+  cb_putcode(cb, OR2ND_OP);
+  cb_putcode(cb, callidx);
+  cb_putlabel(cb, label);
+
+  if (cntxt->tailcall)
+      cb_putcode(cb, RETURN_OP);
+
+  return true;
+
+};
+
+// forward declaration - circular
+bool check_skip_loop_cntxt(SEXP e, CompilerContext *cntxt, bool breakOK);
+
+bool is_loop_stop_fun(const char *fname, CompilerContext *cntxt) {
+  const char *stop_set[] = {"function", "for", "while", "repeat", NULL};
+  SEXP sym = PROTECT( Rf_install(fname) );
+  bool result = is_in_c_set(fname, stop_set) && is_base_var(sym, cntxt);
+  UNPROTECT(1);
+  return result;
+}
+
+bool is_loop_top_fun(const char *fname, CompilerContext *cntxt) {
+  const char *top_set[] = {"(", "{", "if", NULL};    
+  SEXP sym = PROTECT( Rf_install(fname) );
+  bool result = is_in_c_set(fname, top_set) && is_base_var(sym, cntxt);
+  UNPROTECT(1);
+  return result;
+}
+
+bool check_skip_loop_cntxt_list(SEXP elist, CompilerContext *cntxt, bool breakOK) {
+  for (SEXP s = elist; s != R_NilValue; s = CDR(s)) {
+    SEXP a = CAR(s);
+    if (a != R_MissingArg) {
+      if (!check_skip_loop_cntxt(a, cntxt, breakOK)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool check_skip_loop_cntxt(SEXP e, CompilerContext *cntxt, bool breakOK) {
+  if (TYPEOF(e) == LANGSXP) {
+
+    SEXP fun = CAR(e);
+      
+    if (TYPEOF(fun) == SYMSXP) {
+
+      const char* fname = CHAR(PRINTNAME(fun));
+
+      // Check if break/next is allowed in current branch
+      if (!breakOK && (strcmp(fname, "break") == 0 || strcmp(fname, "next") == 0)) {
+        return false;
+      }
+      
+      // Functions that definitely stop loop analysis (e.g., nested loops)
+      if (is_loop_stop_fun(fname, cntxt)) {
+        return true;
+      }
+      
+      // Functions that preserve the loop "top" (e.g., '{', 'if')
+      if (is_loop_top_fun(fname, cntxt)) {
+        return check_skip_loop_cntxt_list(CDR(e), cntxt, breakOK);
+      }
+      
+      // Evaluators that might execute arbitrary code
+      if (strcmp(fname, "eval") == 0 || 
+        strcmp(fname, "evalq") == 0 || 
+        strcmp(fname, "source") == 0) {
+        return false;
+      }
+          
+      return check_skip_loop_cntxt_list(CDR(e), cntxt, false);
+    } else {
+      return check_skip_loop_cntxt_list(e, cntxt, false);
+    }
+  }
+  
+  return true;
+}
+
+void cmp_repeat_body(SEXP body, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  int loop_label = cb_makelabel(cb);
+  int end_label = cb_makelabel(cb);
+
+  cb_putlabel(cb, loop_label);
+
+  CompilerContext * lcntxt = make_loop_ctx(cntxt, loop_label, end_label);
+
+  cmp(body, cb, lcntxt, false, true);
+  cb_putcode(cb, POP_OP);
+  cb_putcode(cb, GOTO_OP);
+  cb_putcodelabel(cb, loop_label);
+  cb_putlabel(cb, end_label);
+}
+
+bool inline_repeat(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  
+  SEXP body = CADR(e);
+
+  if (check_skip_loop_cntxt(body, cntxt, true)) {
+    
+    // Optimization: context is simple enough to skip heavy setup
+    cmp_repeat_body(body, cb, cntxt);
+
+  } else {
+
+    // The original compiler says this is bad
+    // and I agree TODO check if this is real
+    CompilerContext ncntxt = *cntxt;
+    ncntxt.need_return_jmp = true;
+    
+    int ljmpend_label = cb_makelabel(cb);
+
+    cb_putcode(cb, STARTLOOPCNTXT_OP);
+    cb_putcode(cb, 0);
+    cb_putcodelabel(cb, ljmpend_label);
+
+    cmp_repeat_body(body, cb, &ncntxt);
+
+    cb_putlabel(cb, ljmpend_label);
+    cb_putcode(cb, ENDLOOPCNTXT_OP);
+    cb_putcode(cb, 0);
+  }
+
+  cb_putcode(cb, LDNULL_OP);
+
+  if (cntxt->tailcall) {
+    cb_putcode(cb, INVISIBLE_OP);
+    cb_putcode(cb, RETURN_OP);
+  }
+
+  return true;
+}
+
+bool inline_break(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  if (cntxt->loop == NULL) {
+      Loc loc = cb_savecurloc(cb);
+      // TODO notifyWrongBreakNext("break", cntxt, loc);
+      cmp_special(e, cb, cntxt);
+      return true;
+    }
+    else if (cntxt->loop->goto_ok) {
+        cb_putcode(cb, GOTO_OP);
+        cb_putcodelabel(cb, cntxt->loop->end_label_id);
+        return true;
+    } 
+    
+    cmp_special(e, cb, cntxt);
+    return true;
+}
+
+bool inline_next(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  if (cntxt->loop == NULL) {
+    Loc loc = cb_savecurloc(cb);
+    // TODO notifyWrongBreakNext("next", cntxt, loc);
+    cmp_special(e, cb, cntxt);
+    return true;
+  } 
+
+  else if (cntxt->loop->goto_ok) {
+    cb_putcode(cb, GOTO_OP);
+    cb_putcodelabel(cb, cntxt->loop->loop_label_id);
+    return true;
+  }
+  
+  cmp_special(e, cb, cntxt);
+  return true;
+
+}
+
+
+#pragma endregion
