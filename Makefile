@@ -42,7 +42,7 @@ format:
 	fi
 
 .PHONY: test
-test: $(PACKAGE_TAR)
+test: install
 	@for f in tests/*.R; do \
 	  echo "===> Running $$f"; \
 	  $(R) -f $$f || exit 1; \
