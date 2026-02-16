@@ -100,6 +100,16 @@ static int BCVersion;
 
 #pragma region Data Structures
 
+
+typedef struct LoopInfo {
+
+  bool null;                      // Is this a valid loop context?
+  int loop_label_id;              // Label ID for the start of the loop
+  int end_label_id;               // Label ID for the end of the loop
+  bool goto_ok;                   // Can a simple GOTO be used
+
+} LoopInfo;
+
 typedef struct CompilerContext {
 
   bool toplevel;                  // Is this a top-level expression?
@@ -115,21 +125,11 @@ typedef struct CompilerContext {
 
   // Other structures
   struct CompilerEnv *env;        // Current compilation environment
-  struct LoopInfo *loop;          // Current loop context (NULL if not in a loop)
+  struct LoopInfo loop;          // Current loop context (NULL if not in a loop)
   
   SEXP call;                      //Current R call being compiler (used for error messages)
 
 } CompilerContext;
-
-
-typedef struct LoopInfo {
-
-  int loop_label_id;              // Label ID for the start of the loop
-  int end_label_id;               // Label ID for the end of the loop
-  bool goto_ok;                   // Can a simple GOTO be used
-  struct LoopInfo *next;          // Linked list to previous loop (for nested loops)
-
-} LoopInfo;
 
 typedef enum {
 
@@ -1469,7 +1469,7 @@ CompilerContext * make_toplevel_ctx( CompilerEnv *cenv ) {
   ctx->supress_undefined = R_NilValue;
   
   ctx->env = cenv;
-  ctx->loop = NULL;
+  ctx->loop.null = true;
   ctx->call = R_NilValue;
 
   return ctx;
@@ -1532,12 +1532,11 @@ CompilerContext * make_loop_ctx( CompilerContext * cntxt, int loop_label, int en
 
   CompilerContext * ncntxt = make_no_value_ctx( cntxt );
 
-  LoopInfo * li = (LoopInfo *) R_alloc (1, sizeof( LoopInfo ) );
-  li->loop_label_id = loop_label;
-  li->end_label_id = end_label;
-  li->goto_ok = true;
+  ncntxt->loop.loop_label_id = loop_label;
+  ncntxt->loop.end_label_id = end_label;
+  ncntxt->loop.goto_ok = true;
+  ncntxt->loop.null = false;
 
-  ncntxt->loop = li;
   return ncntxt;
 
 };
@@ -1554,8 +1553,8 @@ CompilerContext * make_arg_ctx( CompilerContext * cntxt ) {
   ncntxt->tailcall = false;
   ncntxt->toplevel = false;
   
-  if ( ncntxt->loop != NULL )
-    ncntxt->loop->goto_ok = false;
+  if ( ! ncntxt->loop.null )
+    ncntxt->loop.goto_ok = false;
 
   return ncntxt;
 
@@ -1573,8 +1572,8 @@ CompilerContext * make_promise_ctx( CompilerContext * cntxt ) {
   ncntxt->toplevel = false;
   ncntxt->need_return_jmp = true;
 
-  if ( ncntxt->loop != NULL )
-    ncntxt->loop->goto_ok = false;
+  if ( ! ncntxt->loop.null )
+    ncntxt->loop.goto_ok = false;
 
   return ncntxt;
 
@@ -2851,10 +2850,7 @@ bool inline_repeat(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   } else {
 
-    // The original compiler says this is bad
-    // and I agree TODO check if this is real
-    CompilerContext ncntxt = *cntxt;
-    ncntxt.need_return_jmp = true;
+    cntxt->need_return_jmp = true;
     
     int ljmpend_label = cb_makelabel(cb);
 
@@ -2862,7 +2858,7 @@ bool inline_repeat(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     cb_putcode(cb, 0);
     cb_putcodelabel(cb, ljmpend_label);
 
-    cmp_repeat_body(body, cb, &ncntxt);
+    cmp_repeat_body(body, cb, cntxt);
 
     cb_putlabel(cb, ljmpend_label);
     cb_putcode(cb, ENDLOOPCNTXT_OP);
@@ -2881,15 +2877,15 @@ bool inline_repeat(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 bool inline_break(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
-  if (cntxt->loop == NULL) {
+  if (cntxt->loop.null) {
       Loc loc = cb_savecurloc(cb);
       // TODO notifyWrongBreakNext("break", cntxt, loc);
       cmp_special(e, cb, cntxt);
       return true;
     }
-    else if (cntxt->loop->goto_ok) {
+    else if (cntxt->loop.goto_ok) {
         cb_putcode(cb, GOTO_OP);
-        cb_putcodelabel(cb, cntxt->loop->end_label_id);
+        cb_putcodelabel(cb, cntxt->loop.end_label_id);
         return true;
     } 
     
@@ -2899,16 +2895,16 @@ bool inline_break(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 bool inline_next(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
-  if (cntxt->loop == NULL) {
+  if (cntxt->loop.null) {
     Loc loc = cb_savecurloc(cb);
     // TODO notifyWrongBreakNext("next", cntxt, loc);
     cmp_special(e, cb, cntxt);
     return true;
   } 
 
-  else if (cntxt->loop->goto_ok) {
+  if (cntxt->loop.goto_ok) {
     cb_putcode(cb, GOTO_OP);
-    cb_putcodelabel(cb, cntxt->loop->loop_label_id);
+    cb_putcodelabel(cb, cntxt->loop.loop_label_id);
     return true;
   }
   
