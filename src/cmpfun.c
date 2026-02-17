@@ -6,7 +6,7 @@
 #include <Rinternals.h>
 #include <ctype.h>
 
-//#define DEBUG
+#define DEBUG
 
 extern SEXP R_TrueValue;
 extern SEXP R_FalseValue;
@@ -95,6 +95,19 @@ static int BCVersion;
 #define AND_OP 57
 #define OR_OP 58
 #define NOT_OP 59
+#define SETVAR2_OP 95
+#define STARTASSIGN_OP 61
+#define ENDASSIGN_OP 62
+#define STARTASSIGN2_OP 96
+#define ENDASSIGN2_OP 97
+#define INCLNKSTK_OP 127
+#define DECLNKSTK_OP 128
+#define SETTER_CALL_OP 98
+#define GETTER_CALL_OP 99
+#define SWAP_OP 100
+#define DUP2ND_OP 101
+#define DOLLAR_OP 73
+#define DOLLARGETS_OP 74
 
 #pragma endregion
 
@@ -222,6 +235,7 @@ typedef struct Loc {
 } Loc;
 
 typedef bool (*HandlerFn)(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+typedef bool (*SetterHandlerFn)(SEXP afun, SEXP place, SEXP origplace, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
 
 typedef struct InlineHandler {
 
@@ -229,6 +243,13 @@ typedef struct InlineHandler {
   HandlerFn handler;              // Function pointer to the inlining handler
 
 } InlineHandler;
+
+typedef struct SetterInlineHandler {
+
+  char func_name[256];            // Name of the function being inlined
+  SetterHandlerFn handler;        // Function pointer to the inlining handler
+
+} SetterInlineHandler;
 
 typedef struct InlineInfo {
 
@@ -361,6 +382,10 @@ bool inline_gt( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_and2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_or2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_not( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool cmp_assign( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+//bool inline_dollar_getter( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+//bool inline_dollar_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
+bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
 
 #pragma endregion
 
@@ -2380,20 +2405,19 @@ static const char * math1funs[] = {
   NULL
 };
 
-bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) {
+// Macro to reduce boilerplate for handler assignment
+#define INLINE_HANDLER_CASE(NAMESTR, FN) \
+    if (strcmp(name, NAMESTR) == 0) { \
+      *found = &FN; \
+      return true; \
+    }
 
-  // Macro to reduce boilerplate for handler assignment
-  #define INLINE_HANDLER_CASE(NAMESTR, FN) \
-      if (strcmp(name, NAMESTR) == 0) { \
-        *found = &FN; \
-        return true; \
-      }
+bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) {
 
   if (strcmp(package, "base") == 0) {
     INLINE_HANDLER_CASE("{", inline_left_brace)
     INLINE_HANDLER_CASE("function", inline_function)
     INLINE_HANDLER_CASE("return", inline_return)
-    INLINE_HANDLER_CASE("<-", fake_inline_assign)
     INLINE_HANDLER_CASE("if", inline_if)
     INLINE_HANDLER_CASE("(", inline_left_parenthesis)
     INLINE_HANDLER_CASE("&&", inline_and)
@@ -2420,6 +2444,9 @@ bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) 
     INLINE_HANDLER_CASE("&", inline_and2)
     INLINE_HANDLER_CASE("|", inline_or2)
     INLINE_HANDLER_CASE("!", inline_not)
+    INLINE_HANDLER_CASE("=", cmp_assign)
+    INLINE_HANDLER_CASE("<-", cmp_assign)
+    INLINE_HANDLER_CASE("<<-", cmp_assign)
     
   }
 
@@ -2434,8 +2461,23 @@ bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) 
 
   return false;
 
-#undef INLINE_HANDLER_CASE
 }
+
+bool get_setter_inline_handler( char name[256], char package[256], SetterHandlerFn * found ) {
+
+  if (strcmp(package, "base") == 0) {
+    INLINE_HANDLER_CASE("$<-", dollar_setter_inline_handler)
+  }
+
+}
+
+bool get_getter_inline_handler( char name[256], char package[256], HandlerFn * found ) {
+
+  return false;
+
+}
+
+#undef INLINE_HANDLER_CASE
 
 #pragma region Inline Handlers
 
@@ -3264,5 +3306,482 @@ bool inline_not(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
   return cmp_prim_1(e, cb, NOT_OP, cntxt);
 }
 
+//
+// Assignment inlining
+//
+
+typedef struct FlattenedPlace {
+  
+  SEXP origplaces;
+  SEXP places;
+
+} FlattenedPlace;
+
+SEXP get_assign_fun(SEXP fun) {
+  char buf[512];
+
+  if (TYPEOF(fun) == SYMSXP) {
+    snprintf(buf, sizeof(buf), "%s<-", CHAR(PRINTNAME(fun)));
+    return install(buf);
+  }
+
+  if (TYPEOF(fun) == LANGSXP && Rf_length(fun) == 3) {
+    SEXP op = CAR(fun);
+    if (op == Rf_install("::") || op == Rf_install(":::")) {
+      SEXP member = CADDR(fun);
+      if (TYPEOF(member) == SYMSXP) {
+        snprintf(buf, sizeof(buf), "%s<-", CHAR(PRINTNAME(member)));
+        SEXP afun = PROTECT(Rf_shallow_duplicate(fun));
+        SETCADDR(afun, install(buf));
+        UNPROTECT(1);
+        return afun;
+      }
+    }
+  }
+  return R_NilValue;
+}
+
+bool try_getter_inline(SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  SEXP fun_sym = CAR(call);
+  if (TYPEOF(fun_sym) != SYMSXP)
+      return false;
+
+  char* name = CHAR(PRINTNAME(fun_sym));
+  InlineInfo info = get_inline_info(name, cntxt, false);
+
+  if (!info.can_inline) {
+      return false;
+  } else {
+
+    HandlerFn h;
+    bool found = get_getter_inline_handler(name, info.package, &h);
+
+    if (found) {
+      return h(call, cb, cntxt);
+    } else {
+      return false;
+    }
+  
+  }
+}
+
+bool try_setter_inline(SEXP afun, SEXP place, SEXP origplace, SEXP call, 
+                     CodeBuffer *cb, CompilerContext *cntxt) {
+
+  if (TYPEOF(afun) != SYMSXP)
+    return false;
+
+  char* name = CHAR(PRINTNAME(afun));
+  InlineInfo info = get_inline_info(name, cntxt, false);
+
+  if (!info.can_inline) {
+    return false;
+  } else {
+
+    SetterHandlerFn h;
+    bool found = get_setter_inline_handler(name, info.package, &h);
+
+    if (found) {
+      return h(afun, place, origplace, call, cb, cntxt);
+    } else {
+      return false;
+    }
+
+  }
+}
+
+void cmp_getter_call(SEXP place, SEXP origplace, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  CompilerContext * ncntxt = make_call_ctx(cntxt, place);
+  Loc sloc = cb_savecurloc(cb);
+  cb_setcurexpr(cb, origplace);
+  SEXP fun = CAR(place);
+  
+  if (TYPEOF(fun) == SYMSXP) {
+    if (!try_getter_inline(place, cb, ncntxt)) {
+
+      int ci = cb_putconst(cb, fun);
+      cb_putcode(cb, GETFUN_OP);
+      cb_putcode(cb, ci);
+      
+      cb_putcode(cb, PUSHNULLARG_OP);
+      
+      cmp_call_args(CDDR(place), cb, ncntxt, false);
+      
+      int cci = cb_putconst(cb, place);
+      cb_putcode(cb, GETTER_CALL_OP);
+      cb_putcode(cb, cci);
+      cb_putcode(cb, SWAP_OP);
+    }
+  } 
+  else {
+
+    cmp(fun, cb, ncntxt, false, true);
+    cb_putcode(cb, CHECKFUN_OP);
+    cb_putcode(cb, PUSHNULLARG_OP);    
+    cmp_call_args(CDDR(place), cb, ncntxt, false);
+
+    int cci = cb_putconst(cb, place);
+    cb_putcode(cb, GETTER_CALL_OP);
+    cb_putcode(cb, cci);    
+    cb_putcode(cb, SWAP_OP);
+  }
+  
+  cb_restorecurloc(cb, sloc);
+}
+
+void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  SEXP afun = get_assign_fun(CAR(place));
+  PROTECT(afun);
+
+  SEXP args = CDDR(place);
+  SEXP tmp_name = install("*tmp*");
+  
+  SEXP acall_list = LCONS(afun, LCONS(tmp_name, args));
+  SEXP last = acall_list;
+
+  while (CDR(last) != R_NilValue) last = CDR(last);
+
+  SETCDR(last, LCONS(vexpr, R_NilValue));
+  SET_TAG(CDR(last), install("value"));
+  
+  SEXP acall = PROTECT(acall_list);
+
+  CompilerContext * ncntxt = make_call_ctx(cntxt, acall);
+  
+  Loc sloc = cb_savecurloc(cb);
+
+  SEXP cexpr_list = LCONS(afun, CDR(origplace));
+  SEXP clast = cexpr_list;
+
+  while (CDR(clast) != R_NilValue) clast = CDR(clast);
+  
+  SETCDR(clast, LCONS(vexpr, R_NilValue));
+  SET_TAG(CDR(clast), install("value"));
+  
+  SEXP cexpr = PROTECT(cexpr_list);
+  cb_setcurexpr(cb, cexpr);
+
+  if (afun == R_NilValue) {
+    //compiler_stop("invalid function in complex assignment", cntxt, cb_savecurloc(cb));
+    Rf_error("invalid function in complex assignment");
+  }
+  else if (TYPEOF(afun) == SYMSXP) {
+
+    if (!try_setter_inline(afun, place, origplace, acall, cb, ncntxt)) {
+
+      int ci = cb_putconst(cb, afun);
+      cb_putcode(cb, GETFUN_OP);
+      cb_putcode(cb, ci);     
+      cb_putcode(cb, PUSHNULLARG_OP);
+
+      cmp_call_args(CDDR(place), cb, ncntxt, false);
+      
+      int cci = cb_putconst(cb, acall);
+      int cvi = cb_putconst(cb, vexpr);
+      
+      cb_putcode(cb, SETTER_CALL_OP);
+      cb_putcode(cb, cci);
+      cb_putcode(cb, cvi);
+    
+    }
+  } 
+  else {
+    cmp(afun, cb, ncntxt, false, true);
+    cb_putcode(cb, CHECKFUN_OP);
+    cb_putcode(cb, PUSHNULLARG_OP);
+    cmp_call_args(CDDR(place), cb, ncntxt, false);
+
+    int cci = cb_putconst(cb, acall);
+    int cvi = cb_putconst(cb, vexpr);
+    cb_putcode(cb, SETTER_CALL_OP);
+    cb_putcode(cb, cci);
+    cb_putcode(cb, cvi);
+  }
+
+  cb_restorecurloc(cb, sloc);
+  UNPROTECT(3); // afun, acall, cexpr
+}
+
+FlattenedPlace flatten_place(SEXP place, CompilerContext *cntxt, Loc loc) {
+
+  int count = 0;
+  SEXP p = place;
+
+  while (TYPEOF(p) == LANGSXP) {
+    if (length(p) < 2) {
+      Rf_error("bad assignment 1"); 
+    }
+    count++;
+    p = CADR(p);
+  }
+
+  if (TYPEOF(p) != SYMSXP) {
+    Rf_error("bad assignment 2");
+  }
+
+  SEXP places = PROTECT(allocVector(VECSXP, count));
+  SEXP origplaces = PROTECT(allocVector(VECSXP, count));
+
+  SEXP tmp_name = install("*tmp*");
+
+  p = place;
+  for (int i = 0; i < count; i++) {
+
+    SET_VECTOR_ELT(origplaces, i, p);
+
+    SEXP tplace = PROTECT(Rf_shallow_duplicate(p));
+    SETCADR(tplace, tmp_name);
+    SET_VECTOR_ELT(places, i, tplace);
+    UNPROTECT(1); // tplace
+
+    p = CADR(p);
+  }
+
+  FlattenedPlace result;
+  result.places = places;
+  result.origplaces = origplaces;
+
+  UNPROTECT(2); // places, origplaces
+  return result;
+}
+
+bool cmp_complex_assign(SEXP symbol, SEXP lhs, SEXP value, bool superAssign, CodeBuffer *cb, CompilerContext *cntxt) {
+    
+  int start_op, end_op;
+
+  if (superAssign) {
+    start_op = STARTASSIGN2_OP;
+    end_op = ENDASSIGN2_OP;
+  } else {
+    if (!find_var(symbol, cntxt)) {
+      //TODO notifyUndefVar(symbol, cntxt, cb_savecurloc(cb));
+    }
+    start_op = STARTASSIGN_OP;
+    end_op = ENDASSIGN_OP;
+  }
+
+  if (!cntxt->toplevel)
+    cb_putcode(cb, INCLNKSTK_OP);
+
+  // Compile the value to be assigned
+  CompilerContext * ncntxt = make_non_tail_call_ctx(cntxt);
+  cmp(value, cb, ncntxt, false, true);
+
+  // Prepare constant for the symbol and emit start of assignment
+  int csi = cb_putconst(cb, symbol);
+  cb_putcode(cb, start_op);
+  cb_putcode(cb, csi);
+
+  // Prepare context for arguments/indices
+  ncntxt = make_arg_ctx(cntxt);
+  FlattenedPlace flat = flatten_place(lhs, cntxt, cb_savecurloc(cb));
+  
+  int n_places = length(flat.places);
+
+  // flatPlaceIdxs <- seq_along(flatPlace)[-1]
+  for (int i = n_places - 1; i >= 1; i--) {
+    cmp_getter_call(VECTOR_ELT(flat.places, i), 
+                  VECTOR_ELT(flat.origplaces, i), 
+                  cb, ncntxt);
+  }
+
+  // Emit the primary setter (the actual replacement)
+  cmp_setter_call(VECTOR_ELT(flat.places, 0), 
+                  VECTOR_ELT(flat.origplaces, 0), 
+                  value, cb, ncntxt);
+
+  // Emit the remaining setters in forward order to rebuild the object
+  SEXP vtmp_name = install("*vtmp*");
+  for (int i = 1; i < n_places; i++) {
+    cmp_setter_call(VECTOR_ELT(flat.places, i), 
+                  VECTOR_ELT(flat.origplaces, i), 
+                  vtmp_name, cb, ncntxt);
+  }
+
+  cb_putcode(cb, end_op);
+  cb_putcode(cb, csi);
+
+  if (!cntxt->toplevel)
+      cb_putcode(cb, DECLNKSTK_OP);
+
+  if (cntxt->tailcall) {
+      cb_putcode(cb, INVISIBLE_OP);
+      cb_putcode(cb, RETURN_OP);
+  }
+
+  return true;
+}
+
+bool check_assign(SEXP e, CompilerContext *cntxt, Loc loc) {
+
+  if (length(e) != 3)
+    return false;
+
+  SEXP place = CADR(e);
+
+  if (TYPEOF(place) == SYMSXP || (TYPEOF(place) == STRSXP && length(place) == 1)) {
+    return true;
+  }
+
+  while (TYPEOF(place) == LANGSXP) {
+    SEXP fun = CAR(place);
+
+    bool is_valid_fun = (TYPEOF(fun) == SYMSXP);
+      
+    if (!is_valid_fun && TYPEOF(fun) == LANGSXP && length(fun) == 3) {
+      SEXP fun_head = CAR(fun);
+      if (TYPEOF(fun_head) == SYMSXP) {
+        if (fun_head == R_DoubleColonSymbol || fun_head == R_TripleColonSymbol) {
+          is_valid_fun = true;
+        }
+      }
+    }
+
+    if (!is_valid_fun) {
+      //TODO notify_bad_assign_fun(fun, cntxt, loc);
+      return false;
+    }
+
+    place = CADR(place);
+  }
+
+  return (TYPEOF(place) == SYMSXP);
+
+}
+
+bool cmp_symbol_assign( SEXP symbol, SEXP value, bool super_assign, CodeBuffer * cb, CompilerContext * cntxt ) {
+
+  CompilerContext * ncntxt = make_non_tail_call_ctx(cntxt);
+  cmp(value, cb, ncntxt, false, true);
+
+  int ci = cb_putconst(cb, symbol);
+  if (super_assign)
+    cb_putcode(cb, SETVAR2_OP);
+  else
+    cb_putcode(cb, SETVAR_OP);
+
+  cb_putcode(cb, ci);
+
+  if (cntxt->tailcall) {
+    cb_putcode(cb, INVISIBLE_OP);
+    cb_putcode(cb, RETURN_OP);
+  }
+
+  return true;
+
+}
+
+bool cmp_assign(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  if (!check_assign(e, cntxt, cb_savecurloc(cb))) {
+      cmp_special(e, cb, cntxt);
+      return true;
+  }
+
+  // new kind of comparasion, lets think
+  bool super_assign = (CAR(e) == install("<<-"));
+
+  SEXP lhs = CADR(e);
+  SEXP value = CADDR(e);
+
+  SEXP symbol = get_assigned_var(e /*, cntxt*/);
+
+  if (TYPEOF(symbol) != SYMSXP) {
+    symbol = install(CHAR(asChar(symbol)));
+  }
+
+  if (super_assign && !find_var(symbol, cntxt)) {
+    //TODO notify_no_super_assign_var(symbol, cntxt, cb_savecurloc(cb));
+  }
+
+  if (isSymbol(lhs) || TYPEOF(lhs) == STRSXP) {
+    return cmp_symbol_assign(symbol, value, super_assign, cb, cntxt);
+  } 
+  else if (TYPEOF(lhs) == LANGSXP) {
+    return cmp_complex_assign(symbol, lhs, value, super_assign, cb, cntxt);
+  } 
+  else {
+    cmp_special(e, cb, cntxt);
+    return true;
+  }
+
+  return true;
+
+}
+
+// bool inline_dollar_getter(SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
+
+//   if (Rf_length(call) != 3 || any_dots(call))
+//     return false;
+
+//   SEXP sym = CADDR(call);
+
+//   if (TYPEOF(sym) == STRSXP && Rf_length(sym) > 0) 
+//     sym = install(CHAR(STRING_ELT(sym, 0)));
+
+//   if (TYPEOF(sym) == SYMSXP) {
+//     int ci = cb_putconst(cb, call);
+//     int csi = cb_putconst(cb, sym);
+
+//     cb_putcode(cb, DUP2ND_OP);
+//     cb_putcode(cb, DOLLAR_OP);
+//     cb_putcode(cb, ci);
+//     cb_putcode(cb, csi);
+//     cb_putcode(cb, SWAP_OP);
+//     return true;
+//   }
+
+//   return false;
+
+// }
+
+// bool inline_dollar_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
+
+//   CompilerContext ncntxt = *cntxt;
+//   ncntxt.tailcall = false;
+
+//   int cci = cb_putconst(cb, call);
+//   int cvi = cb_putconst(cb, CADDR(call));
+
+//   cb_putcode(cb, SETTER_CALL_OP);
+//   cb_putcode(cb, cci);
+//   cb_putcode(cb, cvi);
+
+//   return true; 
+// }
+
+bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  DEBUG_PRINT("[_] Trying to inline $<-\n");
+
+  // TODO this doesnt proc
+
+  if (any_dots(place) || length(place) != 3) {
+    return false;
+  }
+
+  SEXP sym = CADDR(place);
+
+  if (TYPEOF(sym) == STRSXP && LENGTH(sym) > 0) {
+      sym = install(CHAR(STRING_ELT(sym, 0)));
+  }
+
+  if (isSymbol(sym)) {
+
+      int ci = cb_putconst(cb, call);
+      int csi = cb_putconst(cb, sym);
+      
+      cb_putcode(cb, DOLLARGETS_OP);
+      cb_putcode(cb, ci);
+      cb_putcode(cb, csi);
+      
+      return true;
+  }
+
+  return false;
+}
 
 #pragma endregion
