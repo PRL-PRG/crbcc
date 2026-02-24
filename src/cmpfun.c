@@ -6,7 +6,7 @@
 #include <Rinternals.h>
 #include <ctype.h>
 
-#define DEBUG
+//#define DEBUG
 
 extern SEXP R_TrueValue;
 extern SEXP R_FalseValue;
@@ -382,10 +382,10 @@ bool inline_gt( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_and2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_or2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_not( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+
 bool cmp_assign( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
-//bool inline_dollar_getter( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
-//bool inline_dollar_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
 bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
+bool dollar_getter_inline_handler(SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
 
 #pragma endregion
 
@@ -2469,10 +2469,16 @@ bool get_setter_inline_handler( char name[256], char package[256], SetterHandler
     INLINE_HANDLER_CASE("$<-", dollar_setter_inline_handler)
   }
 
+  return false;
+
 }
 
 bool get_getter_inline_handler( char name[256], char package[256], HandlerFn * found ) {
 
+  if (strcmp(package, "base") == 0) {
+    INLINE_HANDLER_CASE("$", dollar_getter_inline_handler)
+  }
+  
   return false;
 
 }
@@ -2530,7 +2536,7 @@ bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   DEBUG_PRINT("[_] Inlining function definition");
 
   SEXP formals = CADR( e );
-  SEXP body = CDDR( e );
+  SEXP body = CADDR( e );
 
   SEXP sref = R_NilValue;
 
@@ -3328,16 +3334,15 @@ SEXP get_assign_fun(SEXP fun) {
   if (TYPEOF(fun) == LANGSXP && Rf_length(fun) == 3) {
     SEXP op = CAR(fun);
     if (op == Rf_install("::") || op == Rf_install(":::")) {
-      SEXP member = CADDR(fun);
+      SEXP member = CADDR(fun); // "foo"
+      
       if (TYPEOF(member) == SYMSXP) {
         snprintf(buf, sizeof(buf), "%s<-", CHAR(PRINTNAME(member)));
-        SEXP afun = PROTECT(Rf_shallow_duplicate(fun));
-        SETCADDR(afun, install(buf));
-        UNPROTECT(1);
-        return afun;
+        return Rf_lang3(op, CADR(fun), install(buf));
       }
     }
   }
+  
   return R_NilValue;
 }
 
@@ -3431,45 +3436,61 @@ void cmp_getter_call(SEXP place, SEXP origplace, CodeBuffer *cb, CompilerContext
   cb_restorecurloc(cb, sloc);
 }
 
+// UNSAFE
+SEXP copy_spine_and_append_value(SEXP args, SEXP vexpr) {
+  SEXP head = R_NilValue;
+  SEXP tail = R_NilValue;
+
+  for (SEXP s = args; s != R_NilValue; s = CDR(s)) {
+    SEXP node = PROTECT(Rf_allocList(1)); 
+    SETCAR(node, CAR(s));
+    SET_TAG(node, TAG(s));
+    
+    if (head == R_NilValue) {
+      head = tail = node;
+    } else {
+      SETCDR(tail, node);
+      tail = node;
+    }
+    UNPROTECT(1); // node
+  }
+
+  SEXP val_node = PROTECT(Rf_allocList(1));
+  SETCAR(val_node, vexpr);
+  SET_TAG(val_node, Rf_install("value"));
+
+  if (head == R_NilValue) {
+    head = val_node;
+  } else {
+    SETCDR(tail, val_node);
+  }
+  
+  UNPROTECT(1); // val_node
+  return head;
+}
+
 void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, CompilerContext *cntxt) {
 
   SEXP afun = get_assign_fun(CAR(place));
   PROTECT(afun);
 
-  SEXP args = CDDR(place);
   SEXP tmp_name = install("*tmp*");
-  
-  SEXP acall_list = LCONS(afun, LCONS(tmp_name, args));
-  SEXP last = acall_list;
 
-  while (CDR(last) != R_NilValue) last = CDR(last);
-
-  SETCDR(last, LCONS(vexpr, R_NilValue));
-  SET_TAG(CDR(last), install("value"));
-  
-  SEXP acall = PROTECT(acall_list);
+  SEXP acall_args = PROTECT(copy_spine_and_append_value(CDDR(place), vexpr));
+  SEXP acall = PROTECT(LCONS(afun, LCONS(tmp_name, acall_args)));
 
   CompilerContext * ncntxt = make_call_ctx(cntxt, acall);
-  
   Loc sloc = cb_savecurloc(cb);
 
-  SEXP cexpr_list = LCONS(afun, CDR(origplace));
-  SEXP clast = cexpr_list;
-
-  while (CDR(clast) != R_NilValue) clast = CDR(clast);
+  SEXP cexpr_args = PROTECT(copy_spine_and_append_value(CDDR(origplace), vexpr));
+  SEXP cexpr = PROTECT(LCONS(afun, LCONS(CADR(origplace), cexpr_args)));
   
-  SETCDR(clast, LCONS(vexpr, R_NilValue));
-  SET_TAG(CDR(clast), install("value"));
-  
-  SEXP cexpr = PROTECT(cexpr_list);
   cb_setcurexpr(cb, cexpr);
 
   if (afun == R_NilValue) {
-    //compiler_stop("invalid function in complex assignment", cntxt, cb_savecurloc(cb));
     Rf_error("invalid function in complex assignment");
   }
   else if (TYPEOF(afun) == SYMSXP) {
-
     if (!try_setter_inline(afun, place, origplace, acall, cb, ncntxt)) {
 
       int ci = cb_putconst(cb, afun);
@@ -3485,7 +3506,6 @@ void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, Com
       cb_putcode(cb, SETTER_CALL_OP);
       cb_putcode(cb, cci);
       cb_putcode(cb, cvi);
-    
     }
   } 
   else {
@@ -3502,7 +3522,8 @@ void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, Com
   }
 
   cb_restorecurloc(cb, sloc);
-  UNPROTECT(3); // afun, acall, cexpr
+  UNPROTECT(5); // afun, acall_args, acall, cexpr_args, cexpr
+
 }
 
 FlattenedPlace flatten_place(SEXP place, CompilerContext *cntxt, Loc loc) {
@@ -3528,14 +3549,24 @@ FlattenedPlace flatten_place(SEXP place, CompilerContext *cntxt, Loc loc) {
   SEXP tmp_name = install("*tmp*");
 
   p = place;
+  
   for (int i = 0; i < count; i++) {
-
     SET_VECTOR_ELT(origplaces, i, p);
 
-    SEXP tplace = PROTECT(Rf_shallow_duplicate(p));
-    SETCADR(tplace, tmp_name);
+    //TODO comment on this
+    SEXP new_args = PROTECT(Rf_allocList(1));
+    SETCAR(new_args, tmp_name);
+    SET_TAG(new_args, TAG(CDR(p)));
+    SETCDR(new_args, CDDR(p));
+
+    SEXP tplace = PROTECT(Rf_allocList(1));
+    SETCAR(tplace, CAR(p)); 
+    SET_TAG(tplace, TAG(p));
+    SETCDR(tplace, new_args);   
+    SET_TYPEOF(tplace, LANGSXP);
+
     SET_VECTOR_ELT(places, i, tplace);
-    UNPROTECT(1); // tplace
+    UNPROTECT(2); // tplace, new_args
 
     p = CADR(p);
   }
@@ -3581,6 +3612,7 @@ bool cmp_complex_assign(SEXP symbol, SEXP lhs, SEXP value, bool superAssign, Cod
   
   int n_places = length(flat.places);
 
+  // TODO check if this is GC safe
   // flatPlaceIdxs <- seq_along(flatPlace)[-1]
   for (int i = n_places - 1; i >= 1; i--) {
     cmp_getter_call(VECTOR_ELT(flat.places, i), 
@@ -3712,52 +3744,9 @@ bool cmp_assign(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 }
 
-// bool inline_dollar_getter(SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
-
-//   if (Rf_length(call) != 3 || any_dots(call))
-//     return false;
-
-//   SEXP sym = CADDR(call);
-
-//   if (TYPEOF(sym) == STRSXP && Rf_length(sym) > 0) 
-//     sym = install(CHAR(STRING_ELT(sym, 0)));
-
-//   if (TYPEOF(sym) == SYMSXP) {
-//     int ci = cb_putconst(cb, call);
-//     int csi = cb_putconst(cb, sym);
-
-//     cb_putcode(cb, DUP2ND_OP);
-//     cb_putcode(cb, DOLLAR_OP);
-//     cb_putcode(cb, ci);
-//     cb_putcode(cb, csi);
-//     cb_putcode(cb, SWAP_OP);
-//     return true;
-//   }
-
-//   return false;
-
-// }
-
-// bool inline_dollar_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
-
-//   CompilerContext ncntxt = *cntxt;
-//   ncntxt.tailcall = false;
-
-//   int cci = cb_putconst(cb, call);
-//   int cvi = cb_putconst(cb, CADDR(call));
-
-//   cb_putcode(cb, SETTER_CALL_OP);
-//   cb_putcode(cb, cci);
-//   cb_putcode(cb, cvi);
-
-//   return true; 
-// }
-
 bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
 
   DEBUG_PRINT("[_] Trying to inline $<-\n");
-
-  // TODO this doesnt proc
 
   if (any_dots(place) || length(place) != 3) {
     return false;
@@ -3779,6 +3768,36 @@ bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, C
       cb_putcode(cb, csi);
       
       return true;
+  }
+
+  return false;
+}
+
+bool dollar_getter_inline_handler(SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
+  
+  if (any_dots(call) || length(call) != 3) {
+    return false;
+  }
+
+  SEXP sym = CADDR(call);
+
+  if (TYPEOF(sym) == STRSXP && LENGTH(sym) > 0) {
+    sym = install(CHAR(STRING_ELT(sym, 0)));
+  }
+
+  if (isSymbol(sym)) {
+    int ci = cb_putconst(cb, call);
+    int csi = cb_putconst(cb, sym);
+
+    cb_putcode(cb, DUP2ND_OP);
+
+    cb_putcode(cb, DOLLAR_OP);
+    cb_putcode(cb, ci);
+    cb_putcode(cb, csi);
+
+    cb_putcode(cb, SWAP_OP);
+
+    return true;
   }
 
   return false;
