@@ -108,6 +108,35 @@ static int BCVersion;
 #define DUP2ND_OP 101
 #define DOLLAR_OP 73
 #define DOLLARGETS_OP 74
+#define INCLNK_OP 124
+#define DECLNK_OP 125
+#define DECLNK_N_OP 126
+#define INCLNKSTK_OP 127
+#define DECLNKSTK_OP 128
+#define STARTSUBASSIGN_OP    65
+#define DFLTSUBASSIGN_OP     66
+#define VECSUBASSIGN_OP      86
+#define MATSUBASSIGN_OP      87
+#define SUBASSIGN_N_OP       114
+#define STARTSUBASSIGN_N_OP  105
+#define STARTSUBASSIGN2_N_OP 111
+#define DFLTSUBASSIGN2_OP    72
+#define STARTSUBASSIGN2_OP   71
+#define VECSUBASSIGN2_OP     108
+#define MATSUBASSIGN2_OP     109
+#define MATSUBSET2_OP        107
+#define SUBASSIGN2_N_OP 115
+#define STARTSUBSET_OP     63
+#define DFLTSUBSET_OP      64
+#define DFLTSUBSET2_OP     70
+#define VECSUBSET_OP       84
+#define MATSUBSET_OP       85
+#define STARTSUBSET_N_OP   104
+#define SUBSET2_N_OP       113
+#define VECSUBSET2_OP      106
+#define SUBSET_N_OP         112
+#define STARTSUBSET2_OP     69
+#define STARTSUBSET2_N_OP   110
 
 #pragma endregion
 
@@ -382,10 +411,17 @@ bool inline_gt( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_and2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_or2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_not( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_subset( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_subset2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 
 bool cmp_assign( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
+bool at_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
 bool dollar_getter_inline_handler(SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_subassign_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_subassign2_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_subset_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_subset2_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt );
 
 #pragma endregion
 
@@ -2447,7 +2483,8 @@ bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) 
     INLINE_HANDLER_CASE("=", cmp_assign)
     INLINE_HANDLER_CASE("<-", cmp_assign)
     INLINE_HANDLER_CASE("<<-", cmp_assign)
-    
+    INLINE_HANDLER_CASE("[", inline_subset)
+    INLINE_HANDLER_CASE("[[", inline_subset2)
   }
 
   for (size_t i = 0; math1funs[i] != NULL; i++)
@@ -2467,16 +2504,22 @@ bool get_setter_inline_handler( char name[256], char package[256], SetterHandler
 
   if (strcmp(package, "base") == 0) {
     INLINE_HANDLER_CASE("$<-", dollar_setter_inline_handler)
+    INLINE_HANDLER_CASE("@<-", at_setter_inline_handler)
+    INLINE_HANDLER_CASE("[<-", inline_subassign_setter)
+    INLINE_HANDLER_CASE("[[<-", inline_subassign2_setter)
   }
 
   return false;
 
 }
 
+// TODO only one case?kill
 bool get_getter_inline_handler( char name[256], char package[256], HandlerFn * found ) {
 
   if (strcmp(package, "base") == 0) {
     INLINE_HANDLER_CASE("$", dollar_getter_inline_handler)
+    INLINE_HANDLER_CASE("[", inline_subset_getter)
+    INLINE_HANDLER_CASE("[[", inline_subset2_getter)
   }
   
   return false;
@@ -2988,6 +3031,8 @@ bool cmp_while_body( SEXP call, SEXP condition, SEXP body, CodeBuffer * cb, Comp
   cb_putcodelabel(cb, loop_label);
   cb_putlabel(cb, end_label);
 
+  return true;
+
 }
 
 bool inline_while(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
@@ -3055,6 +3100,8 @@ bool cmp_for_body( int callidx, SEXP body, int ci, CodeBuffer * cb, CompilerCont
     cb_putlabel( cb, end_label );
 
   }
+
+  return true;
 
 }
 
@@ -3171,36 +3218,36 @@ bool cmp_prim_2( SEXP e, CodeBuffer * cb, int op, CompilerContext * cntxt ) {
 
 bool inline_plus(SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
   if ( length(e) == 3 )
-    cmp_prim_2(e, cb, ADD_OP, cntxt);
+    return cmp_prim_2(e, cb, ADD_OP, cntxt);
   else
-    cmp_prim_1(e, cb, UPLUS_OP, cntxt);
+    return cmp_prim_1(e, cb, UPLUS_OP, cntxt);
 }
 
 bool inline_minus(SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
   if ( length(e) == 3 )
-    cmp_prim_2(e, cb, SUB_OP, cntxt);
+    return cmp_prim_2(e, cb, SUB_OP, cntxt);
   else
-    cmp_prim_1(e, cb, UMINUS_OP, cntxt);
+    return cmp_prim_1(e, cb, UMINUS_OP, cntxt);
 }
 
 bool inline_mul(SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
-  cmp_prim_2(e, cb, MUL_OP, cntxt);
+  return cmp_prim_2(e, cb, MUL_OP, cntxt);
 }
 
 bool inline_div(SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
-  cmp_prim_2(e, cb, DIV_OP, cntxt);
+  return cmp_prim_2(e, cb, DIV_OP, cntxt);
 }
 
 bool inline_pow(SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
-  cmp_prim_2(e, cb, EXPT_OP, cntxt);
+  return cmp_prim_2(e, cb, EXPT_OP, cntxt);
 }
 
 bool inline_exp(SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
-  cmp_prim_1(e, cb, EXP_OP, cntxt);
+  return cmp_prim_1(e, cb, EXP_OP, cntxt);
 }
 
 bool inline_sqrt(SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
-  cmp_prim_1(e, cb, SQRT_OP, cntxt);
+  return cmp_prim_1(e, cb, SQRT_OP, cntxt);
 }
 
 bool inline_log(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
@@ -3237,8 +3284,7 @@ bool inline_log(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
 bool cmp_math_1(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
 
   if ( dots_or_missing( CDR(e) ) ) {
-    cmp_builtin(e, cb, cntxt, false);
-    return true;
+    return cmp_builtin(e, cb, cntxt, false);
   }
   if ( length(e) != 2 ) {
     //TODO notify wrong count
@@ -3436,37 +3482,34 @@ void cmp_getter_call(SEXP place, SEXP origplace, CodeBuffer *cb, CompilerContext
   cb_restorecurloc(cb, sloc);
 }
 
-// UNSAFE
 SEXP copy_spine_and_append_value(SEXP args, SEXP vexpr) {
-  SEXP head = R_NilValue;
-  SEXP tail = R_NilValue;
+  
+  SEXP dummy = PROTECT(Rf_allocList(1));
+  SEXP tail = dummy;
 
   for (SEXP s = args; s != R_NilValue; s = CDR(s)) {
+
     SEXP node = PROTECT(Rf_allocList(1)); 
     SETCAR(node, CAR(s));
     SET_TAG(node, TAG(s));
     
-    if (head == R_NilValue) {
-      head = tail = node;
-    } else {
-      SETCDR(tail, node);
-      tail = node;
-    }
-    UNPROTECT(1); // node
+    SETCDR(tail, node);
+    tail = node;
+    
+    UNPROTECT(1); 
   }
 
   SEXP val_node = PROTECT(Rf_allocList(1));
   SETCAR(val_node, vexpr);
   SET_TAG(val_node, Rf_install("value"));
-
-  if (head == R_NilValue) {
-    head = val_node;
-  } else {
-    SETCDR(tail, val_node);
-  }
   
+  SETCDR(tail, val_node);
   UNPROTECT(1); // val_node
-  return head;
+
+  SEXP result = CDR(dummy);
+  UNPROTECT(1); // dummy
+  
+  return result;
 }
 
 void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, CompilerContext *cntxt) {
@@ -3609,6 +3652,8 @@ bool cmp_complex_assign(SEXP symbol, SEXP lhs, SEXP value, bool superAssign, Cod
   // Prepare context for arguments/indices
   ncntxt = make_arg_ctx(cntxt);
   FlattenedPlace flat = flatten_place(lhs, cntxt, cb_savecurloc(cb));
+  PROTECT( flat.origplaces );
+  PROTECT( flat.places );
   
   int n_places = length(flat.places);
 
@@ -3644,6 +3689,7 @@ bool cmp_complex_assign(SEXP symbol, SEXP lhs, SEXP value, bool superAssign, Cod
       cb_putcode(cb, RETURN_OP);
   }
 
+  UNPROTECT(2); // flat.origplaces, flat.places
   return true;
 }
 
@@ -3760,14 +3806,15 @@ bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, C
 
   if (isSymbol(sym)) {
 
-      int ci = cb_putconst(cb, call);
-      int csi = cb_putconst(cb, sym);
-      
-      cb_putcode(cb, DOLLARGETS_OP);
-      cb_putcode(cb, ci);
-      cb_putcode(cb, csi);
-      
-      return true;
+    int ci = cb_putconst(cb, call);
+    int csi = cb_putconst(cb, sym);
+    
+    cb_putcode(cb, DOLLARGETS_OP);
+    cb_putcode(cb, ci);
+    cb_putcode(cb, csi);
+    
+    return true;
+
   }
 
   return false;
@@ -3801,6 +3848,422 @@ bool dollar_getter_inline_handler(SEXP call, CodeBuffer *cb, CompilerContext *cn
   }
 
   return false;
+}
+
+bool at_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  if ( ! dots_or_missing(place) && length(place) == 3 && TYPEOF(CADDR(place)) == SYMSXP ) {
+
+    // Because R is copy-on-modifyyy
+    SEXP place_cp = PROTECT( duplicate(place) );
+
+    SETCADDR( place_cp, ScalarString(PRINTNAME(CADDR(place_cp))) );
+    
+    SEXP i = call;
+    for ( ; CDR(i) != R_NilValue; i = CDR(i) );
+    
+    cmp_setter_call( place_cp, orig, CAR(i), cb, cntxt );
+    return true;
+
+  }
+
+  return false;
+
+}
+
+typedef struct dlftop {
+  int code;
+  bool rank;
+} dlftop;
+
+bool has_names(SEXP place) {
+  for (SEXP s = place; s != R_NilValue; s = CDR(s)) {
+    if (TAG(s) != R_NilValue) {
+      return true; 
+    }
+  }
+
+  return false;
+}
+
+void cmp_indices(SEXP indices, CodeBuffer * cb, CompilerContext * cntxt) {
+
+  for ( SEXP i = indices; i != R_NilValue; i = CDR(i) ) {
+    cmp( CAR(i), cb, cntxt, true, true );
+  }
+
+};
+
+bool cmp_subset_dispatch( int start_op, dlftop dlftop, SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
+
+  if ( dots_or_missing(e) || has_names(e) || length(e) < 3 ) {
+
+    //TODO error cannot compile expression
+    return false;
+  } else {
+    
+    SEXP oe = CADR(e);
+    if ( R_MissingArg == oe ) {
+      //PASS
+      return false;
+    }
+
+    CompilerContext * ncntxt = make_arg_ctx(cntxt);
+    int ci = cb_putconst(cb, e);
+    int label = cb_makelabel(cb);
+
+    cmp(oe, cb, ncntxt, false, true);
+
+    cb_putcode(cb, start_op);
+    cb_putcode(cb, ci);
+    cb_putcodelabel(cb, label);
+
+    SEXP indices = CDDR(e);
+    cmp_indices(indices, cb, ncntxt);
+
+    if (dlftop.rank) {
+      cb_putcode(cb, dlftop.code);
+      cb_putcode(cb, ci);
+      cb_putcode(cb, length(indices));
+    } else {
+      cb_putcode(cb, dlftop.code);
+      cb_putcode(cb, ci);
+    }
+
+    cb_putlabel(cb, label);
+
+    if ( cntxt->tailcall )
+      cb_putcode( cb, RETURN_OP );
+
+    return true;
+
+  }
+
+  return false;
+
+};
+
+bool cmp_dispatch(int start_op, int dflt_op, SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok) {
+
+  if ((missing_ok && any_dots(e)) ||
+      (!missing_ok && dots_or_missing(e)) ||
+      length(e) == 1) {
+        cmp_special(e,cb,cntxt);
+  } else {
+
+    int ne = length(e);
+    SEXP oe = CADR(e);
+
+    if ( oe == R_MissingArg )
+      cmp_special(e,cb,cntxt);
+    else {
+
+      CompilerContext * ncntxt = make_arg_ctx(cntxt);
+      cmp( oe, cb, ncntxt, false, true );
+      int ci = cb_putconst(cb, e);
+      int end_label = cb_makelabel(cb);
+
+      cb_putcode(cb, start_op);
+      cb_putcode(cb, ci);
+      cb_putcodelabel(cb, end_label);
+
+      if ( ne > 2 )
+        cmp_builtin_args(CDDR(e), cb, cntxt, missing_ok);
+
+      cb_putcode(cb, dflt_op);
+      cb_putlabel(cb, end_label);
+
+      if ( cntxt->tailcall )
+        cb_putcode(cb,RETURN_OP);
+
+    }
+
+  }
+
+  return true;
+
+};
+
+bool cmp_setter_dispatch(int start_op, int dflt_op, SEXP afun, SEXP place, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
+
+  if ( any_dots(place) )
+    return false;
+  else {
+
+    int ci = cb_putconst(cb, call);
+    int end_label = cb_makelabel(cb);
+
+    cb_putcode(cb,start_op);
+    cb_putcode(cb,ci);
+    cb_putcodelabel(cb,end_label);
+
+    if (length(place) > 2) {
+      cmp_builtin_args(CDDR(place), cb, cntxt, true);
+    }
+
+    cb_putcode(cb, dflt_op);
+    cb_putlabel(cb, end_label);
+    return true;
+
+  }
+
+}
+
+bool inline_subset( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  if ( dots_or_missing(e) || has_names(e) || length(e) < 3 ) {
+    return cmp_dispatch(STARTSUBSET_OP, DFLTSUBSET_OP, e, cb, cntxt, true);
+  } else {
+
+    int nidx = length(e) - 2;
+    dlftop dlftop;
+
+    if ( nidx == 1 ) {
+      dlftop.code = VECSUBSET_OP;
+      dlftop.rank = false;
+    } else if (nidx == 2) {
+      dlftop.code = MATSUBSET_OP;
+      dlftop.rank = false;
+    } else {
+      dlftop.code = SUBSET_N_OP;
+      dlftop.rank = true;
+    }
+
+    return cmp_subset_dispatch( STARTSUBSET_N_OP, dlftop, e, cb, cntxt );
+
+  }
+
+
+};
+
+bool inline_subset2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  if ( dots_or_missing(e) || has_names(e) || length(e) < 3 ) {
+    return cmp_dispatch( STARTSUBSET2_OP, DFLTSUBSET2_OP, e, cb, cntxt, true );
+  } else {
+
+    int nidx = length(e) - 2;
+    dlftop dlftop;
+    
+    if ( nidx == 1 ) {
+      dlftop.code = VECSUBSET2_OP;
+      dlftop.rank = false;
+    } else if (nidx == 2) {
+      dlftop.code = MATSUBSET2_OP;
+      dlftop.rank = false;
+    } else {
+      dlftop.code = SUBSET2_N_OP;
+      dlftop.rank = true;
+    }
+
+    return cmp_subset_dispatch(STARTSUBSET2_N_OP, dlftop, e, cb, cntxt);
+
+  }
+
+};
+
+bool cmp_subassign_dispatch(int start_op, dlftop dfltop, SEXP afun, SEXP place, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
+
+  if ( dots_or_missing(place) || has_names(place) || length(place) < 3 ) {
+    //TODO cannot compile this
+    Rf_error("x");
+  } else {
+    int ci = cb_putconst(cb, call);
+    int label = cb_makelabel(cb);
+
+    cb_putcode(cb,start_op);
+    cb_putcode(cb,ci);
+    cb_putcodelabel(cb,label);
+
+    SEXP indices = CDDR(place);
+    cmp_indices(indices, cb, cntxt);
+
+    cb_putcode(cb, dfltop.code);
+    cb_putcode(cb, ci);
+
+    if ( dfltop.rank )
+      cb_putcode(cb, length(indices));
+
+    cb_putlabel(cb,label);
+    return true;
+    
+  }
+
+}
+
+bool inline_subassign_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  bool any_names = has_names(place);
+
+  if ( dots_or_missing(place) || any_names || length(place) < 3 ) {
+    return cmp_setter_dispatch(STARTSUBASSIGN_OP, DFLTSUBASSIGN_OP, afun,place,call,cb,cntxt);
+  } else {
+
+    int nidx = length(place) - 2;
+    dlftop dfltop;
+    
+    if ( nidx == 1 ) {
+      dfltop.code = VECSUBASSIGN_OP;
+      dfltop.rank = false;
+    } else if (nidx == 2) {
+      dfltop.code = MATSUBASSIGN_OP;
+      dfltop.rank = false;
+    } else {
+      dfltop.code = SUBASSIGN_N_OP;
+      dfltop.rank = true;
+    }
+
+    return cmp_subassign_dispatch(STARTSUBASSIGN_N_OP, dfltop, afun, place, call, cb, cntxt);
+
+  }
+
+}
+
+bool inline_subassign2_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  bool any_names = has_names(place);
+
+  if ( dots_or_missing(place) || any_names || length(place) < 3 ) {
+    return cmp_setter_dispatch(STARTSUBASSIGN2_OP, DFLTSUBASSIGN2_OP, afun,place,call,cb,cntxt);
+  } else {
+
+    int nidx = length(place) - 2;
+    dlftop dlftop;
+    
+    if ( nidx == 1 ) {
+      dlftop.code = VECSUBASSIGN2_OP;
+      dlftop.rank = false;
+    } else if (nidx == 2) {
+      dlftop.code = MATSUBASSIGN2_OP;
+      dlftop.rank = false;
+    } else {
+      dlftop.code = SUBASSIGN2_N_OP;
+      dlftop.rank = true;
+    }
+
+    return cmp_subassign_dispatch(STARTSUBASSIGN2_N_OP, dlftop, afun, place, call, cb, cntxt);
+
+  }
+
+}
+
+bool cmp_getter_dispatch(int start_op, int dflt_op, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
+
+  if ( any_dots(call) ) {
+    return false; // punt
+  } else {
+
+    int ci = cb_putconst(cb, call);
+    int end_label = cb_makelabel(cb);
+
+    cb_putcode(cb, DUP2ND_OP);
+    
+    cb_putcode(cb, start_op);
+    cb_putcode(cb, ci);
+    cb_putcodelabel(cb, end_label);
+
+    if (length(call) > 2) {
+      cmp_builtin_args(CDDR(call), cb, cntxt, true);
+    }
+
+    cb_putcode(cb, dflt_op);
+    cb_putlabel(cb, end_label);
+    
+    cb_putcode(cb, SWAP_OP);
+
+    return true;
+
+  }
+
+}
+
+bool cmp_subset_getter_dispatch(int start_op, dlftop dfltop, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
+
+  // Fallback if missing args, named args, or insufficient length
+  if ( dots_or_missing(call) || has_names(call) || length(call) < 3 ) {
+    //TODO cannot compile this expression
+    Rf_error("cannot compile this expression");
+    return false;
+  } else {
+    
+    int ci = cb_putconst(cb, call);
+    int end_label = cb_makelabel(cb);
+
+    cb_putcode(cb, DUP2ND_OP);
+    
+    cb_putcode(cb, start_op);
+    cb_putcode(cb, ci);
+    cb_putcodelabel(cb, end_label);
+
+    SEXP indices = CDDR(call);
+    cmp_indices(indices, cb, cntxt);
+
+    if ( dfltop.rank ) {
+      cb_putcode(cb, dfltop.code);
+      cb_putcode(cb, ci);
+      cb_putcode(cb, length(indices));
+    } else {
+      cb_putcode(cb, dfltop.code);
+      cb_putcode(cb, ci);
+    }
+
+    cb_putlabel(cb, end_label);
+    
+    cb_putcode(cb, SWAP_OP);
+    
+    return true;
+  }
+
+}
+
+bool inline_subset_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  if ( dots_or_missing(call) || has_names(call) || length(call) < 3 ) {
+    return cmp_getter_dispatch(STARTSUBSET_OP, DFLTSUBSET_OP, call, cb, cntxt);
+  } else {
+
+    int nidx = length(call) - 2;
+    dlftop dfltop;
+
+    if ( nidx == 1 ) {
+      dfltop.code = VECSUBSET_OP;
+      dfltop.rank = false;
+    } else if (nidx == 2) {
+      dfltop.code = MATSUBSET_OP;
+      dfltop.rank = false;
+    } else {
+      dfltop.code = SUBSET_N_OP;
+      dfltop.rank = true;
+    }
+
+    return cmp_subset_getter_dispatch( STARTSUBSET_N_OP, dfltop, call, cb, cntxt );
+  }
+
+}
+
+bool inline_subset2_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt ) {
+
+  if ( dots_or_missing(call) || has_names(call) || length(call) < 3 ) {
+    return cmp_getter_dispatch(STARTSUBSET2_OP, DFLTSUBSET2_OP, call, cb, cntxt);
+  } else {
+
+    int nidx = length(call) - 2;
+    dlftop dfltop;
+    
+    if ( nidx == 1 ) {
+      dfltop.code = VECSUBSET2_OP;
+      dfltop.rank = false;
+    } else if (nidx == 2) {
+      dfltop.code = MATSUBSET2_OP;
+      dfltop.rank = false;
+    } else {
+      dfltop.code = SUBSET2_N_OP;
+      dfltop.rank = true;
+    }
+
+    return cmp_subset_getter_dispatch(STARTSUBSET2_N_OP, dfltop, call, cb, cntxt);
+  }
+
 }
 
 #pragma endregion
