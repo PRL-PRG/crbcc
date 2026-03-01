@@ -137,6 +137,9 @@ static int BCVersion;
 #define SUBSET_N_OP         112
 #define STARTSUBSET2_OP     69
 #define STARTSUBSET2_N_OP   110
+#define COLON_OP 120
+#define SEQALONG_OP 121
+#define SEQLEN_OP 122
 
 #pragma endregion
 
@@ -413,6 +416,12 @@ bool inline_or2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_not( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_subset( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_subset2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool cmp_multi_colon( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_required( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_with( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_colon( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_seq_along( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_seq_len( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 
 bool cmp_assign( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
@@ -1893,10 +1902,12 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
     if ( a == R_MissingArg ) {
       cb_putcode( cb, DOMISSING_OP );
       cmp_tag(n, cb);
-      return;
+      
+      args = CDR( args ); 
+      continue;           
     }
 
-    // handle ... argument TODO check whether correct
+    // handle ... argument
     if ( (TYPEOF( a ) == SYMSXP) && (strcmp( CHAR(PRINTNAME(a)), "..." ) == 0) ) {
 
       if ( ! find_loc_var(R_DotsSymbol, cntxt) ) {
@@ -1904,7 +1915,9 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
       }
 
       cb_putcode(cb, DODOTS_OP);
-      return;
+      
+      args = CDR( args ); 
+      continue;
     }
 
     if ( TYPEOF(a) == BCODESXP ) {
@@ -1955,6 +1968,7 @@ void cmp_tag( SEXP tag, CodeBuffer * cb ) {
 
   int ci = cb_putconst( cb, tag );
   cb_putcode( cb, SETTAG_OP );
+  cb_putcode( cb, ci );
 
 };
 
@@ -2485,6 +2499,13 @@ bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) 
     INLINE_HANDLER_CASE("<<-", cmp_assign)
     INLINE_HANDLER_CASE("[", inline_subset)
     INLINE_HANDLER_CASE("[[", inline_subset2)
+    INLINE_HANDLER_CASE("::", cmp_multi_colon)
+    INLINE_HANDLER_CASE(":::", cmp_multi_colon)
+    INLINE_HANDLER_CASE("with", inline_with)
+    INLINE_HANDLER_CASE("require", inline_required)
+    INLINE_HANDLER_CASE(":", inline_colon)
+    INLINE_HANDLER_CASE("seq_along", inline_seq_along)
+    INLINE_HANDLER_CASE("seq_len", inline_seq_len)
   }
 
   for (size_t i = 0; math1funs[i] != NULL; i++)
@@ -4265,5 +4286,61 @@ bool inline_subset2_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt ) 
   }
 
 }
+bool cmp_multi_colon(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  if ( !dots_or_missing(e) && length(e) == 3 ) {
+
+    #define good_type(a) ((TYPEOF(a) == SYMSXP) || (TYPEOF(a) == CHARSXP && length(a) == 1))
+
+    SEXP fun = CAR(e);
+    SEXP x = CADR(e);
+    SEXP y = CADDR(e);
+
+    if ( good_type(x) && good_type(y) ) {
+      
+      SEXP x_str = PROTECT(coerceVector(x, STRSXP));
+      SEXP y_str = PROTECT(coerceVector(y, STRSXP));
+      SEXP args  = PROTECT( CONS( x_str, CONS( y_str, R_NilValue ) ) );
+
+      cmp_call_sym_fun(fun, args, e, cb, cntxt);
+      UNPROTECT(1); // args
+      return true;
+    
+    } else return false;
+
+  } else {
+    return false;
+  }
+
+};
+
+bool inline_with(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  cntxt->supress_undefined = R_TrueValue;
+  cmp_call_sym_fun( CAR(e), CDR(e), e, cb, cntxt );
+  return true;
+
+};
+
+bool inline_required(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  cntxt->supress_undefined = R_TrueValue;
+  cmp_call_sym_fun( CAR(e), CDR(e), e, cb, cntxt );
+  return true;
+
+}
+
+bool inline_colon(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_prim_2( e, cb, COLON_OP, cntxt );
+}
+
+bool inline_seq_len(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_prim_2( e, cb, SEQALONG_OP, cntxt );
+}
+
+bool inline_seq_along(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_prim_2( e, cb, SEQLEN_OP, cntxt );
+}
+
 
 #pragma endregion
