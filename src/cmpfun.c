@@ -44,7 +44,7 @@ static int BCVersion;
 #define SETTAG_OP 31
 #define DOTSERR_OP 60
 #define DDVAL_OP 21
-#define DOMISSING_OP 40
+#define DOMISSING_OP 30
 #define DODOTS_OP 32
 #define DDVAL_MISSOK_OP 93
 #define SWITCH_OP 102
@@ -140,6 +140,14 @@ static int BCVersion;
 #define COLON_OP 120
 #define SEQALONG_OP 121
 #define SEQLEN_OP 122
+#define ISNULL_OP 75
+#define ISLOGICAL_OP 76
+#define ISINTEGER_OP 77
+#define ISDOUBLE_OP 78
+#define ISCOMPLEX_OP 79
+#define ISCHARACTER_OP 80
+#define ISSYMBOL_OP 81
+#define ISOBJECT_OP 82
 
 #pragma endregion
 
@@ -369,13 +377,13 @@ bool find_loc_var( SEXP var, CompilerContext * cntxt );
 SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt );
 bool is_ddsym(SEXP sym);
 SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt );
-SEXP check_call( SEXP def, SEXP call );
+bool check_call( SEXP def, SEXP call);
 bool any_dots( SEXP args );
 
 // Inlining
 bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 InlineInfo get_inline_info( char name[256], CompilerContext * cntxt, bool guard_ok );
-bool get_inline_handler( char name[256], char package[256], HandlerFn * found );
+bool get_inline_handler( char name[256], char package[256], CompilerContext * cntxt, HandlerFn * found );
 void pack_frame_name(EnvFrame * frame, char out[256] );
 
 #pragma endregion
@@ -386,7 +394,6 @@ void pack_frame_name(EnvFrame * frame, char out[256] );
 bool inline_left_brace( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
-bool fake_inline_assign( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_left_parenthesis( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_and( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
@@ -422,6 +429,19 @@ bool inline_with( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_colon( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_seq_along( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_seq_len( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_dollar(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool cmp_dot_internal_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+
+bool inline_is_character(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_is_complex(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_is_double(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_is_integer(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_is_logical(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_is_name(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_is_null(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_is_object(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_is_symbol(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 
 bool cmp_assign( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
@@ -431,6 +451,13 @@ bool inline_subassign_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBu
 bool inline_subassign2_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
 bool inline_subset_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_subset2_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt );
+bool inline_local(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+
+SEXP inline_simple_internal_call(SEXP e, SEXP def);
+bool simple_formals(SEXP def);
+bool simple_args(SEXP icall, SEXP forms);
+bool is_simple_internal(SEXP def);
+SEXP simple_internals(SEXP pos);
 
 #pragma endregion
 
@@ -681,12 +708,12 @@ SEXP constant_fold(SEXP e, CompilerContext* cntxt, Loc loc) {
 };
 
 
-void cmp_special(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+bool cmp_special(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   SEXP fun = CAR(e);
 
   if ( TYPEOF(fun) == CHARSXP ) {
-    fun = Rf_install( CHAR( fun ) ); //TODO protect?
+    fun = install( CHAR( fun ) );
   }
 
   int ci = cb_putconst( cb, fun );
@@ -695,6 +722,8 @@ void cmp_special(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   if (  cntxt->tailcall )
     cb_putcode( cb, RETURN_OP );
+
+  return true;
 
 };
 
@@ -859,7 +888,7 @@ bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   HandlerFn handler = NULL;
 
-  if( ! get_inline_handler( name, info.package, &handler ) )
+  if( ! get_inline_handler( name, info.package, cntxt, &handler ) )
     return false;
 
   DEBUG_PRINT(">> Inlining function '%s' from package '%s'\n", name, info.package);
@@ -1101,68 +1130,42 @@ SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt ) {
 
 };
 
-SEXP check_call(SEXP def, SEXP call) {
+bool check_call(SEXP def, SEXP call) {
+    int type = TYPEOF(def);
+    int n_protect = 0;
 
-  int type = TYPEOF(def);
-
-  if (type == BUILTINSXP || type == SPECIALSXP) {
-
-    // Construct call: args(def)
-    SEXP args_call = PROTECT(lang2(install("args"), def));
-    int error = 0;
-
-    // Evaluate args(def)
-    def = R_tryEval(args_call, R_NilValue, &error);
-    UNPROTECT(1); // args_call
-        
-    if (error) return ScalarLogical(NA_LOGICAL);
-
-  }
-
-  // Check if call has any '...' arguments
-  int has_dots = 0;
-
-  for (SEXP runner = CDR(call); runner != R_NilValue; runner = CDR(runner)) {
-    SEXP arg = CAR(runner);
-    if (TYPEOF(arg) == SYMSXP && arg == R_DotsSymbol) {
-      has_dots = 1;
-      break;
-    }
-  }
-
-  // if (typeof(def) != "closure" || anyDots(call)) NA
-  if (TYPEOF(def) != CLOSXP || has_dots) {
-    return ScalarLogical(NA_LOGICAL);
-  }
-
-  // Construct call: match.call(def, call)
-  SEXP match_call_expr = PROTECT( lang3(install("match.call"), def, call) );
-  int errorOccurred = 0;
-  
-  // R_tryEvalSilent suppresses error messages
-  R_tryEvalSilent(match_call_expr, R_NilValue, &errorOccurred);
-  
-  UNPROTECT(1); // match_call_expr
-
-  if (errorOccurred) {
-
-    // Get deparsed call string for the warning message
-    SEXP dep_call = PROTECT(lang3(install("deparse"), call, ScalarInteger(20)));
-    SEXP dep_res = R_tryEval(dep_call, R_NilValue, NULL);
-    const char *call_str = "call";
-    if (TYPEOF(dep_res) == STRSXP && LENGTH(dep_res) > 0) {
-        call_str = CHAR(STRING_ELT(dep_res, 0));
+    if (type == BUILTINSXP || type == SPECIALSXP) {
+        SEXP args_call = PROTECT(Rf_lang2(install("args"), def));
+        def = PROTECT(Rf_eval(args_call, R_BaseEnv)); 
+        n_protect += 2;
     }
 
-    // Signal the warning (equivalent to 'signal(emsg)')
-    warning("possible error in '%s'", call_str);
+    for (SEXP runner = CDR(call); runner != R_NilValue; runner = CDR(runner)) {
+        if (CAR(runner) == R_DotsSymbol) {
+            UNPROTECT(n_protect);
+            return false;
+        }
+    }
 
-    UNPROTECT(1); // dep_call
-    return ScalarLogical(0); // FALSE
-  
-  }
+    if (TYPEOF(def) != CLOSXP) {
+        UNPROTECT(n_protect);
+        return false;
+    }
 
-  return ScalarLogical(1);
+    SEXP match_call_expr = PROTECT(Rf_lang3(install("match.call"), def, call));
+    SEXP try_expr = PROTECT(Rf_lang3(install("try"), match_call_expr, ScalarLogical(1)));
+    n_protect += 2;
+
+    SEXP msg_res = PROTECT(Rf_eval(try_expr, R_BaseEnv));
+    n_protect++;
+
+    if (Rf_inherits(msg_res, "try-error")) {
+        UNPROTECT(n_protect);
+        return false;
+    }
+
+    UNPROTECT(n_protect);
+    return true;
 }
 
 bool is_ddsym(SEXP sym) {
@@ -1761,7 +1764,7 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_o
 
   if ( ! find_var( sym, cntxt ) ) {
     DEBUG_PRINT("?? cmp_sym: Undefined symbol '%s'\n", CHAR(PRINTNAME(sym)));
-    warning("Undefined symbol: %s", CHAR(PRINTNAME(sym)));
+    //warning("Undefined symbol: %s", CHAR(PRINTNAME(sym)));
   }
   
   int poolref = cb_putconst( cb, sym );
@@ -1779,7 +1782,6 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_o
 };
 
 // @manual 2.6
-// TODO add inlineOK argument
 void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_ok ) {
 
   DEBUG_PRINT("++ cmp_call: Compiling function call\n");
@@ -1808,7 +1810,7 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
           // warning("Undefined function: %s", CHAR(PRINTNAME(fun)));
         } else {
           DEBUG_PRINT("++ cmp_call: Found function definition for symbol '%s'\n", CHAR(PRINTNAME(fun)));
-          check_call( def, call ); // todo handle exceptions
+          check_call( def, call );
         }
 
       }
@@ -1911,7 +1913,7 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
     if ( (TYPEOF( a ) == SYMSXP) && (strcmp( CHAR(PRINTNAME(a)), "..." ) == 0) ) {
 
       if ( ! find_loc_var(R_DotsSymbol, cntxt) ) {
-        warning("'...' used in an incorrect context");
+        //warning("'...' used in an incorrect context");
       }
 
       cb_putcode(cb, DODOTS_OP);
@@ -2455,6 +2457,23 @@ static const char * math1funs[] = {
   NULL
 };
 
+static const char *safe_base_internals[] = {
+    "atan2",  "besselY", "beta", "choose","drop", "inherits", "is.vector", "lbeta",
+    "lchoose","nchar", "polyroot", "typeof", "vector", "which.max","which.min",
+    "is.loaded", "identical","match", "rep.int", "rep_len",
+    NULL
+};
+
+static const char *safe_stats_internals[] = {
+  "dbinom",  "dcauchy",  "dgeom",  "dhyper",  "dlnorm", "dlogis",
+   "dnorm",  "dpois",  "dunif",  "dweibull", "fft",  "mvfft", 
+   "pbinom",  "pcauchy",  "pgeom", "phyper",  "plnorm",  "plogis", 
+   "pnorm",  "punif",  "pweibull",  "qbinom",  "qcauchy",  "qgeom",
+    "qhyper",  "qlnorm",  "qlogis",  "qnorm",  "qpois",  "qunif",
+     "qweibull",  "rbinom",  "rcauchy",  "rgeom",  "rhyper",  "rlnorm",  "rlogis", 
+     "rnorm",  "rpois",  "rsignrank",  "runif",  "rweibull",  "rwilcox",  "ptukey",  "qtukey", NULL
+};
+
 // Macro to reduce boilerplate for handler assignment
 #define INLINE_HANDLER_CASE(NAMESTR, FN) \
     if (strcmp(name, NAMESTR) == 0) { \
@@ -2462,7 +2481,11 @@ static const char * math1funs[] = {
       return true; \
     }
 
-bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) {
+bool cmp_builtin_default( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+  return cmp_builtin( e,cb,cntxt,false );
+}
+
+bool get_inline_handler( char name[256], char package[256], CompilerContext * cntxt, HandlerFn * found ) {
 
   if (strcmp(package, "base") == 0) {
     INLINE_HANDLER_CASE("{", inline_left_brace)
@@ -2506,16 +2529,61 @@ bool get_inline_handler( char name[256], char package[256], HandlerFn * found ) 
     INLINE_HANDLER_CASE(":", inline_colon)
     INLINE_HANDLER_CASE("seq_along", inline_seq_along)
     INLINE_HANDLER_CASE("seq_len", inline_seq_len)
+    INLINE_HANDLER_CASE(".Internal", cmp_dot_internal_call)
+    INLINE_HANDLER_CASE("local", inline_local)
+    INLINE_HANDLER_CASE("is.character", inline_is_character)
+    INLINE_HANDLER_CASE("is.complex", inline_is_complex)
+    INLINE_HANDLER_CASE("is.double", inline_is_double)
+    INLINE_HANDLER_CASE("is.integer", inline_is_integer)
+    INLINE_HANDLER_CASE("is.logical", inline_is_logical)
+    INLINE_HANDLER_CASE("is.name", inline_is_name)
+    INLINE_HANDLER_CASE("is.null", inline_is_null)
+    INLINE_HANDLER_CASE("is.object", inline_is_object)
+    INLINE_HANDLER_CASE("is.symbol", inline_is_symbol)
+
+    for (size_t i = 0; math1funs[i] != NULL; i++)
+    {
+      if (strcmp(name, math1funs[i]) == 0) {
+        *found = &cmp_math_1;
+        return true;
+      }
+    }
+    
+    for (size_t i = 0; safe_base_internals[i] != NULL; i++) {
+      if (strcmp(name, safe_base_internals[i]) == 0) {
+        *found = &cmp_simple_internal;
+        return true;
+      }
+    }
+  
   }
 
-  for (size_t i = 0; math1funs[i] != NULL; i++)
-  {
-    if (strcmp(name, math1funs[i]) == 0) {
-      *found = &cmp_math_1;
-      return true;
+  if (strcmp(package, "stats") == 0) {
+
+    for (size_t i = 0; safe_stats_internals[i] != NULL; i++) {
+      if (strcmp(name, safe_stats_internals[i]) == 0) {
+        *found = &cmp_simple_internal;
+        return true;
+      }
     }
-  }
   
+
+  }
+
+  // Check if is SPECIAL or BUILTIN
+  SEXP def = find_fun_def( install(name) , cntxt);
+
+  if (TYPEOF(def) == BUILTINSXP) {
+
+    *found = &cmp_builtin_default;
+    return true;
+
+  } else if (TYPEOF(def) == SPECIALSXP) {
+
+    *found = &cmp_special;
+    return true;
+
+  }
 
   return false;
 
@@ -2692,35 +2760,6 @@ bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   } else {
     cb_putcode( cb, RETURN_OP );
   }
-
-  return true;
-
-};
-
-bool fake_inline_assign( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
-
-  DEBUG_PRINT("[_] Inlining assignment (beta)");
-
-  SEXP lhs = CADR( e );
-  SEXP rhs = CADDR( e );
-
-  if ( TYPEOF( lhs ) != SYMSXP ) {
-    // TODO notify_invalid_lhs_assign( cntxt, cb_savecurloc( cb ) );
-    return false;
-  }
-
-  CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
-  cmp( rhs, cb, ncntxt, false, true );
-
-  int sym_idx = cb_putconst( cb, lhs );
-  cb_putcode( cb, SETVAR_OP );
-  cb_putcode( cb, sym_idx );
-
-  if ( cntxt->tailcall ) {
-    cb_putcode( cb, INVISIBLE_OP );
-    cb_putcode( cb, RETURN_OP );
-  }
-
 
   return true;
 
@@ -4342,5 +4381,400 @@ bool inline_seq_along(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   return cmp_prim_2( e, cb, SEQLEN_OP, cntxt );
 }
 
+bool inline_dollar(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  if (any_dots(e) || length(e) != 3) {
+    cmp_special(e, cb, cntxt);
+    return true; 
+  }
+
+  SEXP arg3 = CADDR(e);
+  SEXP sym = arg3;
+
+  // if (is.character(e[[3]]) && length(e[[3]]) == 1 && e[[3]] != "")
+  if (TYPEOF(arg3) == STRSXP && length(arg3) == 1) {
+    const char *str = CHAR(STRING_ELT(arg3, 0));
+    if (str[0] != '\0') {
+      sym = install(str);
+    }
+  }
+
+  if (TYPEOF(sym) == SYMSXP) {
+
+    CompilerContext * ncntxt = make_arg_ctx(cntxt);
+    
+    cmp(CADR(e), cb, ncntxt, false, true);
+    
+    int ci = cb_putconst(cb, e);
+    int csi = cb_putconst(cb, sym);
+
+    cb_putcode(cb, DOLLAR_OP);
+    cb_putcode(cb, ci);
+    cb_putcode(cb, csi);
+
+    if (cntxt->tailcall) {
+      cb_putcode(cb, RETURN_OP);
+    }
+
+    return true;
+
+  } else {
+    cmp_special(e, cb, cntxt);
+    return true;
+  }
+}
+
+SEXP inline_simple_internal_call(SEXP e, SEXP def) {
+
+  if (!dots_or_missing(e) && is_simple_internal(def)) {
+    
+    SEXP forms = FORMALS(def);
+    SEXP b = BODY(def);
+    
+    if (TYPEOF(b) == LANGSXP && length(b) == 2 && CAR(b) == install("{")) {
+      b = CADR(b);
+    }
+    
+    SEXP icall = CADR(b);
+    
+    // TODO idk match call seems really complex to rewrite by myself
+    SEXP match_call_sym = install("match.call");
+    SEXP mcall_expr = PROTECT(Rf_lang4(match_call_sym, def, e, ScalarLogical(0)));
+    SEXP matched_call = PROTECT(Rf_eval(mcall_expr, R_BaseEnv));
+    
+    SEXP args_head = R_NilValue;
+    SEXP args_tail = R_NilValue;
+    
+    for (SEXP node = CDR(icall); node != R_NilValue; node = CDR(node)) {
+      SEXP n = CAR(node);
+      SEXP subst_val = n;
+      
+      if (TYPEOF(n) == SYMSXP) {
+        bool found = false;
+        
+        for (SEXP m_node = CDR(matched_call); m_node != R_NilValue; m_node = CDR(m_node)) {
+          if (TAG(m_node) == n) {
+            subst_val = CAR(m_node);
+            found = true;
+            break;
+          }
+        }
+        
+        if (!found) {
+          for (SEXP f_node = forms; f_node != R_NilValue; f_node = CDR(f_node)) {
+            if (TAG(f_node) == n) {
+              subst_val = CAR(f_node);
+              break;
+            }
+          }
+        }
+      }
+      
+      SEXP new_node = PROTECT(CONS(subst_val, R_NilValue));
+      if (args_head == R_NilValue) {
+        args_head = new_node;
+      } else {
+        SETCDR(args_tail, new_node);
+      }
+      args_tail = new_node;
+      UNPROTECT(1); // new_node 
+    }
+    
+    PROTECT(args_head);
+    
+                              //as.call(c(icall[[1]], args))
+    SEXP inner_call = PROTECT(Rf_lcons(CAR(icall), args_head));
+    
+    SEXP dot_internal_sym = install(".Internal");
+    SEXP final_call = PROTECT(Rf_lang2(dot_internal_sym, inner_call));
+    
+    UNPROTECT(5); // mcall_expr, matched_call, args_head, inner_call, final_call 
+    return final_call;
+    
+  } else {
+    return R_NilValue;
+  }
+}
+
+bool simple_formals(SEXP def) {
+  SEXP forms = FORMALS(def);
+  
+  // False if "..." is involved
+  for (SEXP node = forms; node != R_NilValue; node = CDR(node)) {
+    if (TAG(node) == R_DotsSymbol)
+      return false;
+  }
+  
+  for (SEXP node = forms; node != R_NilValue; node = CDR(node)) {
+    SEXP d = CAR(node);
+
+    if (d != R_MissingArg) {
+
+      int type = TYPEOF(d);
+
+      if (type == SYMSXP || type == LANGSXP || type == PROMSXP || type == BCODESXP) {
+        return false;
+      }
+
+    }
+  }
+  return true;
+}
+
+
+bool is_simple_internal(SEXP def) {
+
+  if (TYPEOF(def) == CLOSXP && simple_formals(def)) {
+    
+    SEXP b = BODY(def);
+    
+    if (TYPEOF(b) == LANGSXP && length(b) == 2 && CAR(b) == install("{")) {
+      b = CADR(b);
+    }
+    
+    if (TYPEOF(b) == LANGSXP && CAR(b) == install(".Internal")) {
+
+      SEXP icall = CADR(b);
+      SEXP ifun = CAR(icall);
+      
+      if (TYPEOF(ifun) == SYMSXP) {
+        
+        // .Internal(is.builtin.internal(as.name(ifun)))
+        // TODO okay or not?
+
+        SEXP is_builtin_sym = install("is.builtin.internal");
+        SEXP dot_internal_sym = install(".Internal");
+        
+        SEXP inner_call = PROTECT(Rf_lang2(is_builtin_sym, ifun));
+        SEXP outer_call = PROTECT(Rf_lang2(dot_internal_sym, inner_call));
+        
+        SEXP res = PROTECT(Rf_eval(outer_call, R_BaseEnv));
+        bool is_builtin = LOGICAL(res)[0];
+        UNPROTECT(3);
+
+        if (is_builtin && simple_args(icall, FORMALS(def))) {
+          return true;
+        }
+
+      }
+    }
+  }
+  return false;
+}
+
+// Note: forms is passed directly instead of names(forms) to do pointer matching on tags.
+bool simple_args(SEXP icall, SEXP forms) {
+
+  for (SEXP node = CDR(icall); node != R_NilValue; node = CDR(node)) {
+    SEXP a = CAR(node);
+    
+    if (a == R_MissingArg) {
+      return false;
+    } else if (TYPEOF(a) == SYMSXP) {
+
+      bool found = false;
+
+      for (SEXP f_node = forms; f_node != R_NilValue; f_node = CDR(f_node)) {
+        if (TAG(f_node) == a) {
+          found = true;
+          break;
+        }
+
+      }
+
+      if (!found)
+        return false;
+
+    } else {
+      
+      int type = TYPEOF(a);
+      if (type == LANGSXP || type == PROMSXP || type == BCODESXP) {
+        return false;
+      }
+    
+    }
+  }
+  return true;
+}
+
+
+SEXP simple_internals(SEXP pos) {
+  
+  // names <- ls(pos = pos, all.names = TRUE)
+  SEXP ls_sym = install("ls");
+  SEXP all_names_sym = install("all.names");
+  
+  SEXP ls_call = PROTECT(Rf_lang3(ls_sym, pos, ScalarLogical(1)));
+  SET_TAG(CDDR(ls_call), all_names_sym);
+  
+  SEXP names_vec = PROTECT(Rf_eval(ls_call, R_GlobalEnv));
+  
+  if (TYPEOF(names_vec) != STRSXP || length(names_vec) == 0) {
+    UNPROTECT(2); // ls_call, names_vec
+    return Rf_allocVector(STRSXP, 0);
+  }
+
+  SEXP as_env_sym = install("as.environment");
+  SEXP env_call = PROTECT(Rf_lang2(as_env_sym, pos));
+  SEXP target_env = PROTECT(Rf_eval(env_call, R_GlobalEnv));
+  
+  int n = length(names_vec);
+  int match_count = 0;
+  
+  // Temporary array to flag which names are simple internals
+  int *keep = (int*)R_alloc(n, sizeof(int));
+  
+  for (int i = 0; i < n; i++) {
+    SEXP sym = installChar(STRING_ELT(names_vec, i));
+    SEXP def = Rf_findVarInFrame(target_env, sym);
+    
+    if (def != R_UnboundValue && is_simple_internal(def)) {
+      keep[i] = 1;
+      match_count++;
+    } else {
+      keep[i] = 0;
+    }
+  }
+  
+  SEXP res = PROTECT(Rf_allocVector(STRSXP, match_count));
+  int idx = 0;
+  for (int i = 0; i < n; i++) {
+    if (keep[i]) {
+      SET_STRING_ELT(res, idx++, STRING_ELT(names_vec, i));
+    }
+  }
+  
+  UNPROTECT(4);
+  return res;
+};
+
+bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  
+  if (any_dots(e))
+    return false;
+  
+  SEXP fun_sym = CAR(e);   
+  SEXP def = find_fun_def(fun_sym, cntxt);
+  
+  if (!check_call(def, e)) {
+    return false;
+  }
+  
+  SEXP call = inline_simple_internal_call(e, def);
+  
+  if (call == R_NilValue) {
+    return false;
+  } else {
+    return cmp_dot_internal_call(call, cb, cntxt);
+  }
+}
+
+
+bool cmp_dot_internal_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  
+  SEXP ee = CADR(e);
+  SEXP sym = CAR(ee);
+  
+  bool is_builtin = false;
+  
+  if (TYPEOF(sym) == SYMSXP) {
+
+    SEXP is_builtin_sym = install("is.builtin.internal");
+    SEXP dot_internal_sym = install(".Internal");
+    
+    SEXP inner_call = PROTECT(Rf_lang2(is_builtin_sym, sym));
+    SEXP outer_call = PROTECT(Rf_lang2(dot_internal_sym, inner_call));
+    
+    SEXP res = PROTECT(Rf_eval(outer_call, R_BaseEnv));
+    
+    if (TYPEOF(res) == LGLSXP && LENGTH(res) > 0) {
+      is_builtin = LOGICAL(res)[0];
+    }
+    
+    UNPROTECT(3);
+  }
+  
+  if (is_builtin) {
+    cmp_builtin(ee, cb, cntxt, true);
+  } else {
+    cmp_special(e, cb, cntxt);
+  }
+  
+  return true;
+}
+
+bool inline_local(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  
+  if (length(e) == 2) {
+    
+    SEXP expr = CADR(e); 
+    
+    SEXP fun_sym = install("function");
+    SEXP inner_call = PROTECT(Rf_lang4(fun_sym, R_NilValue, expr, R_NilValue));
+    
+    SEXP outer_call = PROTECT(Rf_lang1(inner_call));
+    
+    cmp(outer_call, cb, cntxt, false, true);
+    
+    UNPROTECT(2); // outer_call, inner_call
+    return true;
+    
+  } else return false;
+}
+
+bool cmp_is( int op, SEXP e, CodeBuffer *cb, CompilerContext * cntxt ) {
+
+  if ( any_dots(e) || length(e) != 2 )
+    return cmp_builtin(e, cb, cntxt, false);
+  else {
+
+    CompilerContext * s = make_arg_ctx(cntxt);
+    cmp(CADR(e), cb, s, false, true);
+    cb_putcode(cb, op);
+
+    if ( cntxt->tailcall )
+      cb_putcode(cb, RETURN_OP);
+    
+    return true;
+  }
+
+};
+
+bool inline_is_character(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_is(ISCHARACTER_OP, e, cb, cntxt);
+}
+
+bool inline_is_complex(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_is(ISCOMPLEX_OP, e, cb, cntxt);
+}
+
+bool inline_is_double(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_is(ISDOUBLE_OP, e, cb, cntxt);
+}
+
+bool inline_is_integer(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_is(ISINTEGER_OP, e, cb, cntxt);
+}
+
+bool inline_is_logical(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_is(ISLOGICAL_OP, e, cb, cntxt);
+}
+
+bool inline_is_name(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  // is.name uses the same instruction as is.symbol
+  return cmp_is(ISSYMBOL_OP, e, cb, cntxt);
+}
+
+bool inline_is_null(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_is(ISNULL_OP, e, cb, cntxt);
+}
+
+bool inline_is_object(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_is(ISOBJECT_OP, e, cb, cntxt);
+}
+
+bool inline_is_symbol(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+  return cmp_is(ISSYMBOL_OP, e, cb, cntxt);
+}
 
 #pragma endregion
