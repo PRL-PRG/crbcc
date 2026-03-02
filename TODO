@@ -1,13 +1,13 @@
-* ==== READY TO BE COMPARED WITH -o0 compilation setting ===
-* Add label tables
-* Add constant folding
-* Add inlining
+figure out how to make check_call normal
 
-Stylistic nuances:
-* rewrite TYPEOF(x) == TYPE to Rf_isType
-* make a toolking for working with generic vectors this resizing is annoying
+TODO test if safe_stats_internals are being inlined
+TODO install default BUILTIN and SPECIAL handlers. How? idk
+Also checking the .Internal things need more attention its not tested enough
+
+TODO traversal of the compilation frames to figure out from which package a concrete call should originate
+TODO return cmp special when calling it in inliners despite it only returning true its ugly
+TODO inline .Call
+TODO BUILTIN and SPECIALS are not being procdd
 
 optimization note: sometimes i think the compiler now uses Rs internal functions / data types,
 when it could be using its own representations. This is not ideal
-
-Install builtin and special on startup idkkkk
