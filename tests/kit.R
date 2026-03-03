@@ -318,8 +318,212 @@ benchmarked_fn <- function() {
 
   }
 
+  test_simple_internals <- function(x) {
+
+    res1 <- dnorm(x, 0, 1, FALSE)
+    
+    res2 <- dnorm(x)
+    
+    res3 <- dnorm(sd = 2, mean = 1, x = x)
+    
+  }
+
+  test_is_handlers <- function(x) {
+
+      is_char = is.character(x)
+      is_cplx = is.complex(x)
+      is_dbl  = is.double(x)
+      is_int  = is.integer(x)
+      is_lgl  = is.logical(x)
+      is_name = is.name(x)
+      is_null = is.null(x)
+      is_obj  = is.object(x)
+      is_sym  = is.symbol(x)
+
+  }
+
+  test_builtin <- function() {
+    
+    combined <- list(x, y)
+    length(combined)
+
+  }
+
+  test_generic_special <- function(x) {
+
+    res <- substitute(x)
+    quote(res)
+
+  }  
+
+  test_builtin <- function() {
+    
+    combined <- list(x, y)
+    length(combined)
+
+  }
+
+
+  test_generic_special <- function(x) {
+
+    res <- substitute(x)
+    quote(res)
+
+  }
+
+  #TODO this compiler reallllyy slow even slower than Rs compiler
+  f <- function(x, y) { y; x }
+  `f<-` <- function(x, y, value) { y; x }
+  g <- function(x, y) { y; x }
+  `g<-` <- function(x, y, value) { y; x }
+
+  hard_to_compile <- function(x, y, ...) {
+    # 1. Nested complex assignment with side-effects
+    f(g(x, print(y)), y) <- 3
+    
+    # 2. Non-local loop control inside a promise/closure
+    repeat {
+      lapply(1:5, function(i) {
+        if (i == 3) break  
+      })
+    }
+    
+    # 3. Dots (...) passed to a math builtin
+    return(sum(x, y, ...))
+  }
+
+  hard_to_compile_2 <- function(env, my_list) {
+    
+    while (TRUE) {
+      cmd <- receive_command()
+      eval(cmd, envir = env)
+    }
+    
+    ast_tree <- bquote( my_list[[.(1 + 2)]] <- "Done" )
+    
+    total <- sum(1, , 3)
+    
+    names(my_list$metadata)[2] <<- "processed"
+    
+    return(ast_tree)
+  }
+
+  hard_to_compile_3 <- function(mat, threshold) {
+    
+    # TODO this
+    #`*` <- function(a, b) base::`*`(a, b) + 1
+    
+    # 2. Named arguments in subsetting and sub-assignment
+    mat[row = 1, col = 2] <- mat[row = 2, col = 1] * 10
+    
+    # 3. Non-local return hidden inside a promise
+    lapply(1:5, function(i) {
+      if (mat[1, 2] > threshold) {
+        return(TRUE)
+      }
+    })
+    
+    return(FALSE)
+  }
+
+  hard_to_compile_4 <- function(data_vec) {
+    
+    # 1. The 'browser()' bailout (even if it's dead code)
+    if (FALSE) {
+      browser()
+    }
+    
+    # 2. Assignment inside a function argument
+    res <- median( clean_data <- na.omit(data_vec) )
+    
+    # 3. Computed namespace resolution
+    target_func <- paste0("me", "an")
+    final_val <- `::`("base", target_func)(res)
+    
+    return(final_val)
+  }
+
 }
 
+test_package <- function(package) {
 
-results_x <- benchmark_compilers(benchmarked_fn);
-print(results_x);
+  ns <- getNamespace(package)
+  symbols <- ls(ns, all.names=T)
+  objects <- lapply(symbols, get, envir=ns)
+
+  is_closure <- sapply(objects, \(x) typeof(x) == "closure")
+  funs <- objects[is_closure]
+  func_names <- symbols[is_closure]
+
+  uncompiled_funs <- lapply(funs, function(f) {
+    res <- f
+    body(res) <- body(f)
+    return(res)
+  })
+
+  names(uncompiled_funs) <- func_names
+  compiled_ok <- 0
+
+  for (i in seq_along(uncompiled_funs)) {
+    
+    func_id <- names(uncompiled_funs)[i]
+    cat(sprintf("Compiling %s...\n", func_id))
+    
+    tryCatch({
+      res <- benchmark_compilers(uncompiled_funs[[i]])
+      
+      if (!isTRUE(res$bytecode_identical)) {
+        cat(sprintf("\n========================================\n"))
+        cat(sprintf("[MISMATCH] Compilers are NOT identical!\n"))
+        cat(sprintf("Stopped at: %s\n", func_id))
+        cat(sprintf("========================================\n\n"))
+        
+        # Print the function that broke your compiler
+        print(uncompiled_funs[[i]])
+        
+        # Wait for you to press Enter
+        readLines(con = "stdin", n = 1)
+        
+        # Clear the console (sends CTRL+L)
+        system("clear")
+        
+      } else {
+        cat("[OK]\n")
+        compiled_ok <- compiled_ok + 1
+      }
+    
+    }, error = function(e) {
+      cat(sprintf("\n========================================\n"))
+      cat(sprintf("[FATAL] Compiler crashed!\n"))
+      cat(sprintf("Stopped at: %s\n", func_id))
+      cat(sprintf("Error: %s\n", e$message))
+      cat(sprintf("========================================\n\n"))
+      
+      # Print the function that crashed your compiler
+      print(uncompiled_funs[[i]])
+      
+      # Wait for you to press Enter
+      readline(prompt = "\nPress [Enter] to clear the console and exit...")
+      
+      # Clear the console
+      cat("\014")
+      
+      # Halt the script
+      stop("Test suite halted due to fatal crash.")
+    })
+    
+  }
+
+  cat(sprintf("\n[SUCCESS] All %d functions compiled perfectly!\n", compiled_ok))
+
+}
+
+bench <- function (args)
+{
+  identical(a, quote(...))
+}
+
+x <- benchmark_compilers(bench)
+print(x)
+
+#test_package("compiler")

@@ -716,7 +716,7 @@ bool cmp_special(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     fun = install( CHAR( fun ) );
   }
 
-  int ci = cb_putconst( cb, fun );
+  int ci = cb_putconst( cb, e );
   cb_putcode( cb, CALLSPECIAL_OP );
   cb_putcode( cb, ci );
 
@@ -1207,7 +1207,7 @@ bool find_loc_var( SEXP var, CompilerContext * cntxt ) {
   CompilerEnv * cenv = cntxt->env;
   VarInfo var_info = find_cenv_var( var, cenv );
 
-  if ( var_info.found && var_info.defining_frame->type == FRAME_LOCAL ) {
+  if ( var_info.found && var_info.defining_frame != NULL && var_info.defining_frame->type == FRAME_LOCAL ) {
       DEBUG_PRINT("++ find_loc_var: Symbol '%s' found in LOCAL scope\n", CHAR(PRINTNAME(var)));
       return true;
   } else {
@@ -1216,38 +1216,31 @@ bool find_loc_var( SEXP var, CompilerContext * cntxt ) {
   }
 
 }
-
 VarInfo find_cenv_var( SEXP var, CompilerEnv * cenv ) {
 
   VarInfo info = { NULL, R_NilValue, false };
-
   const char* var_name = CHAR( PRINTNAME( var ) );
 
   EnvFrame * current = cenv->top_frame;
+  SEXP last_env = R_NilValue;
 
-  // Walk up the environment frames
+  // Walk up the compiler environment frames
   while ( current != NULL ) {
 
     // Check if its in extra_vars
     if ( (current->extra_vars != R_NilValue) && (TYPEOF(current->extra_vars) == STRSXP) ) {
-
       int n = Rf_length( current->extra_vars );
       for ( int i = 0; i < n; i++ ) {
-        
         const char* extra = CHAR( STRING_ELT( current->extra_vars, i ) );
-
         if ( strcmp( var_name, extra ) == 0 ) {
           info.defining_frame = current;
           info.found = true;
           return info;
         }
-
       }
-     
     }
 
-    // If not check if its in runtime environment,
-    // using Rf_findVarInFrame3
+    // Check if its in runtime environment for this specific frame
     SEXP val = Rf_findVarInFrame3( current->r_env, var, TRUE );
     if ( val != R_UnboundValue ) {
       info.defining_frame = current;
@@ -1256,13 +1249,26 @@ VarInfo find_cenv_var( SEXP var, CompilerEnv * cenv ) {
       return info;
     }
 
+    last_env = current->r_env;
     current = current->parent;
+  }
 
+  if (last_env != R_NilValue) {
+      SEXP env = ENCLOS(last_env);
+      while (env != R_NilValue && env != R_EmptyEnv) {
+          SEXP val = Rf_findVarInFrame3(env, var, TRUE);
+          if (val != R_UnboundValue) {
+              info.defining_frame = NULL;
+              info.value = val;
+              info.found = true;
+              return info;
+          }
+          env = ENCLOS(env);
+      }
   }
 
   return info; // Not found
-
-};
+}
 
 SEXP get_assigned_var( SEXP var ) {
   SEXP v = CADR( var );
@@ -2130,21 +2136,15 @@ bool may_call_browser( SEXP expr, CompilerContext * cntxt ) {
       const char* fname = CHAR( PRINTNAME( fun ) );
       
       if ( strcmp(fname, "browser") == 0 ) {
-        if ( is_base_var(fun, cntxt) )
-          return true;
-      }
-
-      if ( strcmp(fname, "function") == 0 ) {
-        if ( is_base_var(fun, cntxt) )
-          return false;
-      }
-
-      else {
+        return true;
+      } else if ( (strcmp(fname, "function") == 0) && is_base_var(fun, cntxt) ) {
+        return false;
+      } else {
         may_call_browser_list( CDR( expr ), cntxt );
       }
 
     } else {
-      if (may_call_browser_list(expr, cntxt)) return true;
+      return may_call_browser_list(expr, cntxt); return true;
     }
   } else {
     return false;
@@ -2159,7 +2159,7 @@ bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt) {
 
     SEXP expr = CAR( node );
 
-    if ( (expr == R_MissingArg) && may_call_browser( expr, cntxt ) )
+    if ( (expr != R_MissingArg) && may_call_browser( expr, cntxt ) )
       return true;
 
     node = CDR( node );
@@ -2256,6 +2256,7 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
     
     if ( may_call_browser( BODY(f), ncntxt ) ) {
       DEBUG_PRINT("!! cmpfun: Function may call browser, skipping compilation\n");
+      UNPROTECT(2); // cenv->shadow_stack, fenv->shadow_stack
       return f;
     }
     
@@ -2540,6 +2541,7 @@ bool get_inline_handler( char name[256], char package[256], CompilerContext * cn
     INLINE_HANDLER_CASE("is.null", inline_is_null)
     INLINE_HANDLER_CASE("is.object", inline_is_object)
     INLINE_HANDLER_CASE("is.symbol", inline_is_symbol)
+    INLINE_HANDLER_CASE("$", inline_dollar)
 
     for (size_t i = 0; math1funs[i] != NULL; i++)
     {
@@ -2571,7 +2573,7 @@ bool get_inline_handler( char name[256], char package[256], CompilerContext * cn
   }
 
   // Check if is SPECIAL or BUILTIN
-  SEXP def = find_fun_def( install(name) , cntxt);
+  SEXP def = find_fun_def( install(name) , cntxt );
 
   if (TYPEOF(def) == BUILTINSXP) {
 
@@ -3031,17 +3033,15 @@ bool inline_break(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   if (cntxt->loop.null) {
       Loc loc = cb_savecurloc(cb);
       // TODO notifyWrongBreakNext("break", cntxt, loc);
-      cmp_special(e, cb, cntxt);
-      return true;
+      return cmp_special(e, cb, cntxt);
     }
     else if (cntxt->loop.goto_ok) {
         cb_putcode(cb, GOTO_OP);
         cb_putcodelabel(cb, cntxt->loop.end_label_id);
         return true;
-    } 
+    }
     
-    cmp_special(e, cb, cntxt);
-    return true;
+    return cmp_special(e, cb, cntxt);
 }
 
 bool inline_next(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
@@ -3117,6 +3117,7 @@ bool inline_while(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     cmp_while_body( e, condition, body, cb, cntxt );
 
     cb_putlabel( cb, ljmpend );
+    cb_putcode( cb, ENDLOOPCNTXT_OP );
     cb_putcode( cb, 0 );
 
   }
@@ -3148,18 +3149,19 @@ bool cmp_for_body( int callidx, SEXP body, int ci, CodeBuffer * cb, CompilerCont
     cb_putcode(cb, callidx);
     cb_putcode(cb, ci);
     cb_putcodelabel(cb, loop_label);
-    cb_putlabel(cb, body_label);
-
-    CompilerContext * lcntxt = make_loop_ctx( cntxt, loop_label, end_label );
-    cmp( body, cb, lcntxt, false, true );
-
-    cb_putcode(cb, POP_OP);
-    cb_putlabel( cb, loop_label );
-    cb_putcode( cb, STEPFOR_OP );
-    cb_putcodelabel( cb, body_label );
-    cb_putlabel( cb, end_label );
 
   }
+
+  cb_putlabel(cb, body_label);
+
+  CompilerContext * lcntxt = make_loop_ctx( cntxt, loop_label, end_label );
+  cmp( body, cb, lcntxt, false, true );
+
+  cb_putcode(cb, POP_OP);
+  cb_putlabel( cb, loop_label );
+  cb_putcode( cb, STEPFOR_OP );
+  cb_putcodelabel( cb, body_label );
+  cb_putlabel( cb, end_label );
 
   return true;
 
@@ -4653,7 +4655,7 @@ bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   if (any_dots(e))
     return false;
   
-  SEXP fun_sym = CAR(e);   
+  SEXP fun_sym = CAR(e);
   SEXP def = find_fun_def(fun_sym, cntxt);
   
   if (!check_call(def, e)) {
