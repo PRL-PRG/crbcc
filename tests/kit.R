@@ -518,12 +518,8 @@ test_package <- function(package) {
 
 }
 
-bench <- function (args)
-{
-  identical(a, quote(...))
-}
 
-x <- benchmark_compilers(bench)
+x <- benchmark_compilers(benchmarked_fn)
 print(x)
 
 #test_package("compiler")

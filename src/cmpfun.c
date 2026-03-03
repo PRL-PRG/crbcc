@@ -1121,22 +1121,34 @@ SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt ) {
 
   if ( var_info.found ) {
     SEXP val = var_info.value;
+    
+    // TODO base R functions seem to be lazyloaded
+    // as promises?
+    if (TYPEOF(val) == PROMSXP) {
+        
+      int err = 0;
+        
+        // Evaluating the symbol in the top frame forces the promise safely
+        val = R_tryEval(fun_sym, cenv->top_frame->r_env, &err);
+        if (err) return R_NilValue;
+    }
+    
     if ( Rf_isFunction( val ) ) {
       return val;
     }
   }
 
   return R_NilValue; // Not found
-
-};
+}
 
 bool check_call(SEXP def, SEXP call) {
+
     int type = TYPEOF(def);
     int n_protect = 0;
 
     if (type == BUILTINSXP || type == SPECIALSXP) {
         SEXP args_call = PROTECT(Rf_lang2(install("args"), def));
-        def = PROTECT(Rf_eval(args_call, R_BaseEnv)); 
+        def = PROTECT(Rf_eval(args_call, R_BaseEnv));
         n_protect += 2;
     }
 
@@ -1147,19 +1159,19 @@ bool check_call(SEXP def, SEXP call) {
         }
     }
 
-    if (TYPEOF(def) != CLOSXP) {
+    if (def == R_NilValue || TYPEOF(def) != CLOSXP) {
         UNPROTECT(n_protect);
         return false;
     }
 
-    SEXP match_call_expr = PROTECT(Rf_lang3(install("match.call"), def, call));
-    SEXP try_expr = PROTECT(Rf_lang3(install("try"), match_call_expr, ScalarLogical(1)));
+    SEXP quoted_call = PROTECT(Rf_lang2(install("quote"), call));
+    SEXP match_call_expr = PROTECT(Rf_lang3(install("match.call"), def, quoted_call));
     n_protect += 2;
 
-    SEXP msg_res = PROTECT(Rf_eval(try_expr, R_BaseEnv));
-    n_protect++;
+    int err_occurred = 0;
+    SEXP msg_res = R_tryEval(match_call_expr, R_BaseEnv, &err_occurred);
 
-    if (Rf_inherits(msg_res, "try-error")) {
+    if (err_occurred) {
         UNPROTECT(n_protect);
         return false;
     }
@@ -1857,14 +1869,10 @@ void cmp_call_sym_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, Compiler
   cb_putcode( cb, GETFUN_OP );
   cb_putcode( cb, ci );
   
-  bool nse = false;
-  const char *fun_name = CHAR(PRINTNAME(fun));
-
-  for (const char** symbol = maybe_NSE_symbols; *symbol != NULL; ++symbol) {
-    if ( strcmp( fun_name, *symbol ) == 0 ) nse = true;
-  }
+  bool nse = is_in_c_set( CHAR(PRINTNAME(fun)), maybe_NSE_symbols );
 
   cmp_call_args( args, cb, cntxt, nse );
+
   ci = cb_putconst( cb, call );
   cb_putcode( cb, CALL_OP );
   cb_putcode( cb, ci );
@@ -1898,7 +1906,8 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
 
   DEBUG_PRINT("++ cmp_call_args: Compiling function call arguments\n");
 
-  SEXP names = getAttrib( args, R_NamesSymbol );
+  SEXP names = getAttrib( args, R_NamesSymbol ); // TODO wrong
+
   CompilerContext * pnctxt = make_promise_ctx( cntxt );
 
   while ( args != R_NilValue ) {
@@ -4327,11 +4336,12 @@ bool inline_subset2_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt ) 
   }
 
 }
+
 bool cmp_multi_colon(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   if ( !dots_or_missing(e) && length(e) == 3 ) {
 
-    #define good_type(a) ((TYPEOF(a) == SYMSXP) || (TYPEOF(a) == CHARSXP && length(a) == 1))
+    #define good_type(a) ((TYPEOF(a) == SYMSXP) || (TYPEOF(a) == STRSXP && length(a) == 1))
 
     SEXP fun = CAR(e);
     SEXP x = CADR(e);
@@ -4344,7 +4354,7 @@ bool cmp_multi_colon(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
       SEXP args  = PROTECT( CONS( x_str, CONS( y_str, R_NilValue ) ) );
 
       cmp_call_sym_fun(fun, args, e, cb, cntxt);
-      UNPROTECT(1); // args
+      UNPROTECT(3); // x_str, y_str, args
       return true;
     
     } else return false;
@@ -4431,7 +4441,12 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def) {
   if (!dots_or_missing(e) && is_simple_internal(def)) {
     
     SEXP forms = FORMALS(def);
+    
     SEXP b = BODY(def);
+    
+    if (TYPEOF(b) == BCODESXP) {
+      b = R_BytecodeExpr(b);
+    }
     
     if (TYPEOF(b) == LANGSXP && length(b) == 2 && CAR(b) == install("{")) {
       b = CADR(b);
@@ -4439,9 +4454,10 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def) {
     
     SEXP icall = CADR(b);
     
-    // TODO idk match call seems really complex to rewrite by myself
     SEXP match_call_sym = install("match.call");
-    SEXP mcall_expr = PROTECT(Rf_lang4(match_call_sym, def, e, ScalarLogical(0)));
+    SEXP quote_sym = install("quote");
+    SEXP quoted_e = PROTECT(Rf_lang2(quote_sym, e));
+    SEXP mcall_expr = PROTECT(Rf_lang4(match_call_sym, def, quoted_e, ScalarLogical(0)));
     SEXP matched_call = PROTECT(Rf_eval(mcall_expr, R_BaseEnv));
     
     SEXP args_head = R_NilValue;
@@ -4484,13 +4500,12 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def) {
     
     PROTECT(args_head);
     
-                              //as.call(c(icall[[1]], args))
     SEXP inner_call = PROTECT(Rf_lcons(CAR(icall), args_head));
-    
     SEXP dot_internal_sym = install(".Internal");
     SEXP final_call = PROTECT(Rf_lang2(dot_internal_sym, inner_call));
     
-    UNPROTECT(5); // mcall_expr, matched_call, args_head, inner_call, final_call 
+    UNPROTECT(6); // quoted_e, mcall_expr, matched_call, args_head, inner_call, final_call 
+    
     return final_call;
     
   } else {
@@ -4530,34 +4545,37 @@ bool is_simple_internal(SEXP def) {
     
     SEXP b = BODY(def);
     
+    // TODO body() in R implicitly seems to unwrap bytecode objects
+    // since R 3.5.0 apparently packages are shipped as bytecode or something?
+    if (TYPEOF(b) == BCODESXP) {
+      b = R_BytecodeExpr(b);
+    }
+    
     if (TYPEOF(b) == LANGSXP && length(b) == 2 && CAR(b) == install("{")) {
       b = CADR(b);
     }
     
     if (TYPEOF(b) == LANGSXP && CAR(b) == install(".Internal")) {
-
       SEXP icall = CADR(b);
       SEXP ifun = CAR(icall);
       
       if (TYPEOF(ifun) == SYMSXP) {
-        
-        // .Internal(is.builtin.internal(as.name(ifun)))
-        // TODO okay or not?
-
         SEXP is_builtin_sym = install("is.builtin.internal");
         SEXP dot_internal_sym = install(".Internal");
+        SEXP quote_sym = install("quote");
         
-        SEXP inner_call = PROTECT(Rf_lang2(is_builtin_sym, ifun));
+        SEXP quoted_ifun = PROTECT(Rf_lang2(quote_sym, ifun));
+        SEXP inner_call = PROTECT(Rf_lang2(is_builtin_sym, quoted_ifun));
         SEXP outer_call = PROTECT(Rf_lang2(dot_internal_sym, inner_call));
         
         SEXP res = PROTECT(Rf_eval(outer_call, R_BaseEnv));
         bool is_builtin = LOGICAL(res)[0];
-        UNPROTECT(3);
-
+        
+        UNPROTECT(4); // res, outer_call, inner_call, quoted_ifun
+        
         if (is_builtin && simple_args(icall, FORMALS(def))) {
           return true;
         }
-
       }
     }
   }
@@ -4654,7 +4672,7 @@ bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   
   if (any_dots(e))
     return false;
-  
+ 
   SEXP fun_sym = CAR(e);
   SEXP def = find_fun_def(fun_sym, cntxt);
   
@@ -4684,7 +4702,8 @@ bool cmp_dot_internal_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     SEXP is_builtin_sym = install("is.builtin.internal");
     SEXP dot_internal_sym = install(".Internal");
     
-    SEXP inner_call = PROTECT(Rf_lang2(is_builtin_sym, sym));
+    SEXP quoted_sym = PROTECT(Rf_lang2(install("quote"), sym));
+    SEXP inner_call = PROTECT(Rf_lang2(is_builtin_sym, quoted_sym));
     SEXP outer_call = PROTECT(Rf_lang2(dot_internal_sym, inner_call));
     
     SEXP res = PROTECT(Rf_eval(outer_call, R_BaseEnv));
@@ -4693,7 +4712,7 @@ bool cmp_dot_internal_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
       is_builtin = LOGICAL(res)[0];
     }
     
-    UNPROTECT(3);
+    UNPROTECT(4);
   }
   
   if (is_builtin) {
