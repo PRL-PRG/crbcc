@@ -6,7 +6,7 @@
 #include <Rinternals.h>
 #include <ctype.h>
 
-//#define DEBUG
+// #define DEBUG
 
 extern SEXP R_TrueValue;
 extern SEXP R_FalseValue;
@@ -529,21 +529,35 @@ SEXP check_const(SEXP e) {
 
 };
 
-static SEXP constant_fold_sym( SEXP var, CompilerContext * cntxt ) {
+static SEXP constant_fold_sym(SEXP var, CompilerContext *cntxt) {
 
-  if ( is_in_c_set(CHAR(PRINTNAME(var)), const_names) && is_base_var(var, cntxt) ) {
+  if (is_in_c_set(CHAR(PRINTNAME(var)), const_names)) {
+      DEBUG_PRINT("\t[@] Was in set\n");
 
-    SEXP val = Rf_findVar( var, R_BaseNamespace );
+    if ( is_base_var(var, cntxt) ) {
+      DEBUG_PRINT("\t[@] Was based\n");
 
-    if ( Rf_isFunction( val ) ) {
-      return val;
+          
+      SEXP val = Rf_findVar(var, R_BaseNamespace);
+        
+      // Base R variables might be lazily loaded promises
+      if (TYPEOF(val) == PROMSXP) {
+        int err = 0;
+        val = R_tryEval(var, R_BaseNamespace, &err);
+        if (err) return R_NilValue;
+      }
+
+      DEBUG_PRINT("\t[@] SYMBAHH\n");
+
+      return check_const(val);
+  
     }
 
   }
 
   return R_NilValue;
 
-};
+}
 
 static SEXP get_fold_fun(SEXP var, CompilerContext *cntxt) {
 
@@ -860,7 +874,7 @@ InlineInfo get_inline_info( char name[256], CompilerContext * cntxt, bool guard_
 
     }
 
-    ret.package = ///// LEFT OF HERE
+    ret.package = ///// LEFT OFF HERE
 
   }
 
@@ -870,6 +884,7 @@ InlineInfo get_inline_info( char name[256], CompilerContext * cntxt, bool guard_
   InlineInfo ret;
   ret.can_inline = true;
   ret.guard_needed = false;
+  ret.env = R_BaseEnv;
   strncpy(ret.package, "base\0", 5);
 
   return ret;
@@ -1098,19 +1113,9 @@ void cb_setcurexpr(CodeBuffer *cb, SEXP expr) {
 
 static bool is_base_var(SEXP sym, CompilerContext *cntxt) {
 
-  if (find_loc_var(sym, cntxt)) {
-    return false;
-  }
-
-  SEXP env = cntxt->env->top_frame->r_env;
-  SEXP val = Rf_findVar(sym, env);
-
-  if (val != R_UnboundValue) {
-    int t = TYPEOF(val);
-    return (t == SPECIALSXP || t == BUILTINSXP);
-  }
-
-  return false;
+  InlineInfo info = get_inline_info( CHAR(PRINTNAME(sym)), cntxt, false );
+  return ( info.can_inline &&
+    ( info.env == R_BaseEnv || info.env == R_BaseNamespace) ) ; 
 
 };
 
@@ -3260,15 +3265,13 @@ bool cmp_prim_2( SEXP e, CodeBuffer * cb, int op, CompilerContext * cntxt ) {
   // since check_needs_inc always returns false now its true functionality is omitted 
 
   if ( dots_or_missing( CDR(e) ) ) {
-    cmp_builtin(e, cb, cntxt, false);
-    return true;
+    return cmp_builtin(e, cb, cntxt, false);
   }
 
   if ( length(e) != 3 ) {
     // TODO notify wrong arg count
     // notifyWrongArgCount(e[[1]], cntxt, loc = cb$savecurloc())
-    cmp_builtin(e, cb, cntxt, false);
-    return true;
+    return cmp_builtin(e, cb, cntxt, false);
   }
 
   CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
@@ -4386,11 +4389,11 @@ bool inline_colon(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 }
 
 bool inline_seq_len(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
-  return cmp_prim_2( e, cb, SEQALONG_OP, cntxt );
+  return cmp_prim_1( e, cb, SEQLEN_OP, cntxt );
 }
 
 bool inline_seq_along(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
-  return cmp_prim_2( e, cb, SEQLEN_OP, cntxt );
+  return cmp_prim_1( e, cb, SEQALONG_OP, cntxt );
 }
 
 bool inline_dollar(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {

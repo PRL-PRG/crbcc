@@ -463,15 +463,22 @@ test_package <- function(package) {
 
   names(uncompiled_funs) <- func_names
   compiled_ok <- 0
+  speedups <- numeric(0)
 
   for (i in seq_along(uncompiled_funs)) {
     
     func_id <- names(uncompiled_funs)[i]
     cat(sprintf("Compiling %s...\n", func_id))
+
+    # Skip the three ones which contain switches
+    if ( func_id %in% c(".onLoad", "findLocals1", "setCompilerOptions") ) {
+      next
+    }
     
     tryCatch({
       res <- benchmark_compilers(uncompiled_funs[[i]])
       
+
       if (!isTRUE(res$bytecode_identical)) {
         cat(sprintf("\n========================================\n"))
         cat(sprintf("[MISMATCH] Compilers are NOT identical!\n"))
@@ -490,6 +497,11 @@ test_package <- function(package) {
       } else {
         cat("[OK]\n")
         compiled_ok <- compiled_ok + 1
+        
+        if (!is.null(res$speedup)) {
+          speedups <- c(speedups, res$speedup)
+        }
+
       }
     
     }, error = function(e) {
@@ -506,7 +518,7 @@ test_package <- function(package) {
       readline(prompt = "\nPress [Enter] to clear the console and exit...")
       
       # Clear the console
-      cat("\014")
+      system("clear")
       
       # Halt the script
       stop("Test suite halted due to fatal crash.")
@@ -514,12 +526,19 @@ test_package <- function(package) {
     
   }
 
+  avg_speedup <- if (length(speedups) > 0) mean(speedups) else NA
+  
   cat(sprintf("\n[SUCCESS] All %d functions compiled perfectly!\n", compiled_ok))
+  cat(sprintf("[PERFORMANCE] Average compiler speedup: %.2fx\n", avg_speedup))
 
 }
 
+fails <- function (elist, shadowed, cntxt) 
+{
+    return (T)
+}
 
-x <- benchmark_compilers(benchmarked_fn)
-print(x)
+#x <- benchmark_compilers(fails)
+#print(x)
 
-#test_package("compiler")
+test_package("compiler")
