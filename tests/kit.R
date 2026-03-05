@@ -388,7 +388,6 @@ benchmarked_fn <- function() {
       })
     }
     
-    # 3. Dots (...) passed to a math builtin
     return(sum(x, y, ...))
   }
 
@@ -410,13 +409,8 @@ benchmarked_fn <- function() {
 
   hard_to_compile_3 <- function(mat, threshold) {
     
-    # TODO this
-    #`*` <- function(a, b) base::`*`(a, b) + 1
-    
-    # 2. Named arguments in subsetting and sub-assignment
     mat[row = 1, col = 2] <- mat[row = 2, col = 1] * 10
     
-    # 3. Non-local return hidden inside a promise
     lapply(1:5, function(i) {
       if (mat[1, 2] > threshold) {
         return(TRUE)
@@ -428,21 +422,58 @@ benchmarked_fn <- function() {
 
   hard_to_compile_4 <- function(data_vec) {
     
-    # 1. The 'browser()' bailout (even if it's dead code)
     if (FALSE) {
       browser()
     }
     
-    # 2. Assignment inside a function argument
     res <- median( clean_data <- na.omit(data_vec) )
     
-    # 3. Computed namespace resolution
     target_func <- paste0("me", "an")
     final_val <- `::`("base", target_func)(res)
     
     return(final_val)
   }
 
+  switchtest <- function(selector, val) {
+    
+    switch(selector,
+      
+      "test_numeric" = ,
+      "num" = switch(val,
+        "position 1",
+        ,               
+        "position 3"
+      ),
+      
+      "test_char_def" = switch(val,
+        a = "alpha",
+        "I am the default fallback!",
+        b = "beta"
+      ),
+
+      "test_trail" = switch(val,
+        x = "xylophone",
+        y = ,           
+        z =             
+      ),
+
+      "test_dup" = switch(val,
+        dup = "first dup",  
+        dup = "second dup", 
+        other = "other"
+      ),
+
+      "test_corner" = switch(val, "lonely"),
+
+      "test_abort" = switch(val,
+        a = "apple",
+        "unnamed 1",
+        "unnamed 2"
+      ),
+
+      "Outer default reached"
+    )
+  }
 }
 
 test_package <- function(package) {
@@ -469,11 +500,6 @@ test_package <- function(package) {
     
     func_id <- names(uncompiled_funs)[i]
     cat(sprintf("Compiling %s...\n", func_id))
-
-    # Skip the three ones which contain switches
-    if ( func_id %in% c(".onLoad", "findLocals1", "setCompilerOptions") ) {
-      next
-    }
     
     tryCatch({
       res <- benchmark_compilers(uncompiled_funs[[i]])
@@ -485,13 +511,8 @@ test_package <- function(package) {
         cat(sprintf("Stopped at: %s\n", func_id))
         cat(sprintf("========================================\n\n"))
         
-        # Print the function that broke your compiler
         print(uncompiled_funs[[i]])
-        
-        # Wait for you to press Enter
         readLines(con = "stdin", n = 1)
-        
-        # Clear the console (sends CTRL+L)
         system("clear")
         
       } else {
@@ -511,16 +532,10 @@ test_package <- function(package) {
       cat(sprintf("Error: %s\n", e$message))
       cat(sprintf("========================================\n\n"))
       
-      # Print the function that crashed your compiler
       print(uncompiled_funs[[i]])
       
-      # Wait for you to press Enter
-      readline(prompt = "\nPress [Enter] to clear the console and exit...")
+      readLines(con = "stdin", n = 1)
       
-      # Clear the console
-      system("clear")
-      
-      # Halt the script
       stop("Test suite halted due to fatal crash.")
     })
     
@@ -533,12 +548,8 @@ test_package <- function(package) {
 
 }
 
-fails <- function (elist, shadowed, cntxt) 
-{
-    return (T)
-}
 
-#x <- benchmark_compilers(fails)
+#x <- benchmark_compilers(benchmarked_fn)
 #print(x)
 
 test_package("compiler")
