@@ -248,15 +248,23 @@ typedef struct CodeBuffer {
   bool expr_tracking_on;           // Is expression tracking on
 
   struct SwitchPatch *switch_patches;    // Linked list head of switch statement patches
+  struct SwitchPatch *patch_tail         // O(1) append
 
 } CodeBuffer;
 
 typedef struct SwitchPatch {
 
-  int cb_index;                   // Position in code buffer to patch
-  int *label_ids;                 // Array of label IDs to jump to
-  int count;                      // Number of label IDs
-  struct SwitchPatch *next;       // Next patch in linked list
+  bool has_char_labels;
+  int char_code_offset;     // Where to patch the char INTSXP index
+  int n_char;               // Length of char labels array
+  int * char_labels;        // Array of label IDs (with default at the end)
+
+  // Numeric Labels Data (Always used)
+  int num_code_offset;      // Where to patch the num INTSXP index
+  int n_num;                // Length of num labels array
+  int * num_labels;         // Array of label IDs (with default at the end)
+
+  struct SwitchPatch * next;
 
 } SwitchPatch;
 
@@ -330,7 +338,7 @@ void cb_putcode(CodeBuffer *cb, int opcode);
 int cb_getcode(CodeBuffer *cb, int pos);
 int cb_putconst(CodeBuffer *cb, SEXP item);
 SEXP cb_getconst(CodeBuffer *cb, int idx);
-void cb_putswitch(CodeBuffer *cb, int *label_ids, int count);
+void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, int * char_labels, int char_count, int char_pos);
 
 // === CONTEXT AND ENVIRONMENT FUNCTIONS ===
 
@@ -434,6 +442,7 @@ bool inline_dollar(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 bool cmp_dot_internal_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 bool inline_c_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_switch(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 
 bool inline_is_character(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 bool inline_is_complex(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
@@ -934,30 +943,31 @@ bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 };
 
 
-// TODO check heavy
-void cb_putswitch(CodeBuffer *cb, int *label_ids, int count) {
+void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, int * char_labels, int char_count, int char_pos) {
 
-  cb_putcode(cb, SWITCH_OP);
+  SwitchPatch * patch = (SwitchPatch *) R_alloc(1, sizeof(SwitchPatch));
+  
+  patch->has_char_labels = (char_count > 0);
+  
+  patch->char_code_offset = char_pos;
+  patch->num_code_offset = int_pos;
+  
+  patch->n_char = char_count;
+  patch->n_num = int_count;
 
-  int patch_pos = cb->code_count; // Position to patch later, placing into SwitchPatch struct
-  cb_putcode(cb, 0); // Placeholder
-
-  SwitchPatch * patch = (SwitchPatch *) R_alloc (1, sizeof( SwitchPatch ));
-  patch->cb_index = patch_pos;
-  patch->count = count;
-
-  patch->label_ids = (int *) R_alloc ( count, sizeof( int ) );
-  memcpy( patch->label_ids, label_ids, count * sizeof( int ) );
+  patch->char_labels = char_labels;
+  patch->num_labels = int_labels;
+  patch->next = NULL;
 
   if ( cb->switch_patches == NULL ) {
     cb->switch_patches = patch;
-    patch->next = NULL;
+    cb->patch_tail = patch; // Track the tail for O(1) appends
   } else {
-    patch->next = cb->switch_patches;
-    cb->switch_patches = patch;
+    cb->patch_tail->next = patch;
+    cb->patch_tail = patch;
   }
 
-};
+}
 
 void ensure_label_capacity(LabelTable *lt, int needes_index) {
 
@@ -1012,6 +1022,37 @@ int cb_makelabel(CodeBuffer * cb) {
 
 }
 
+void cb_patch_switches(CodeBuffer *cb) {
+
+  SwitchPatch *patch = cb->switch_patches;
+
+  while (patch != NULL) {
+    
+    if (patch->has_char_labels) {
+      SEXP char_sexp = PROTECT(allocVector(INTSXP, patch->n_char));
+      for (int i = 0; i < patch->n_char; i++) {
+        INTEGER(char_sexp)[i] = cb->label_table.table[patch->char_labels[i]];
+      }
+      int char_idx = cb_putconst(cb, char_sexp);
+      cb->code[patch->char_code_offset] = char_idx; 
+      UNPROTECT(1); 
+    }
+
+    SEXP num_sexp = PROTECT(allocVector(INTSXP, patch->n_num));
+    for (int i = 0; i < patch->n_num; i++) {
+      INTEGER(num_sexp)[i] = cb->label_table.table[patch->num_labels[i]];
+    }
+    int num_idx = cb_putconst(cb, num_sexp);
+    cb->code[patch->num_code_offset] = num_idx;
+    UNPROTECT(1);
+
+    patch = patch->next;
+  }
+  
+  cb->switch_patches = NULL;
+  if (cb->patch_tail) cb->patch_tail = NULL;
+}
+
 void cb_patchlabels(CodeBuffer * cb) {
 
   for ( int i = 0; i < cb->code_count; i++ ) {
@@ -1029,37 +1070,14 @@ void cb_patchlabels(CodeBuffer * cb) {
     
       if ( table_result == -1 )
         Rf_error("Unresolved label reference: %d", code);
+
       
       cb->code[i] = table_result;
     
     }
   }
 
-  // Patch switch statement patches
-  SwitchPatch * patch = cb->switch_patches;
-  while ( patch ) {
-
-    SEXP offset_table = PROTECT(Rf_allocVector( INTSXP, patch->count ));
-
-    for (int i = 0; i < patch->count; i++) {
-        
-      int label_index = patch->label_ids[i];
-      INTEGER(offset_table)[i] = cb->label_table.table[label_index];
-      // NOTE: here, the conversion from negative doesnt happen. It only happens
-      // when extracting from code buffer, because there it would clash with actual opcodes.
-      // Here its a separate structure.
-
-      // TODO check for unresolved labels
-
-    }
-    
-    int idx = cb_putconst(cb, offset_table);
-    cb->code[patch->cb_index] = idx;
-    patch = patch->next;
-
-    UNPROTECT(1); // offset_table
-
-  }
+  cb_patch_switches(cb);
 
 }
 
@@ -2559,6 +2577,7 @@ bool get_inline_handler( char name[256], char package[256], CompilerContext * cn
     INLINE_HANDLER_CASE("is.symbol", inline_is_symbol)
     INLINE_HANDLER_CASE("$", inline_dollar)
     INLINE_HANDLER_CASE(".Call", inline_c_call)
+    INLINE_HANDLER_CASE("switch", inline_switch)
 
     for (size_t i = 0; math1funs[i] != NULL; i++)
     {
@@ -4838,51 +4857,156 @@ bool inline_c_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 }
 
-int missing_args(SEXP e, int * missing) {
+typedef struct {
 
-  int n_missing = 0;
+  SEXP expr;
+  const char * name;
+  int label;
+  bool is_missing;
+  bool is_default;
+  int next_non_missing;
+
+} SwitchCase;
+
+// returns false if there are multiple defaults
+bool preprocess_cases(SEXP cases, SwitchCase * processed, CodeBuffer * cb, bool * has_names) {
+
+  int n_unnamed = 0;
+  int n_named = 0;
+
+  for ( SEXP iter = cases; iter != R_NilValue; iter = CDR(iter) ) {
+    SEXP name = TAG(iter);
+    if (name == R_NilValue || strlen(CHAR(PRINTNAME(name))) == 0) n_unnamed++;
+    else n_named++;
+  }
+
+  if (n_named == 0 && length(cases) == 1) {
+    n_named = 1; 
+    *has_names = true;
+  } else {
+    *has_names = (n_named > 0);
+  }
+
+  if (n_unnamed > 1 && n_named > 0) {
+      return false; 
+  }
+
+  // When a missing case is met, a pointer to it in the processed array is stored.
+  // Once another non-missing case occurs, the unresolved cases get its next_non_missing
+  // set to it and the unresolved array is cleared.
+  int n_unresolved = 0;
+  SwitchCase ** unresolved = (SwitchCase**) R_alloc( length(cases), sizeof(SwitchCase*) );
+
+
   int idx = 0;
+  for ( SEXP iter = cases; iter != R_NilValue; iter = CDR(iter) ) {
 
-  for ( SEXP iter = e; iter != R_NilValue; iter = CDR(iter) ) {
-    if ( CAR(iter) == R_MissingArg ) {
-      missing[n_missing] = idx;
-      n_missing++; 
+    SEXP expr = CAR(iter);
+    SEXP name = TAG(iter);
+
+    SwitchCase * current = &(processed[idx]);
+
+    current->expr = expr;
+
+    current->is_missing = (expr == R_MissingArg);
+    current->is_default = ( (name == R_NilValue) || (strlen(CHAR(PRINTNAME(name))) == 0) );
+
+
+    if ( !current->is_missing ) {
+      current->label = cb_makelabel(cb);      
+      current->next_non_missing = current->label;
+    }
+
+    if ( current->is_missing ) {
+      current->label = -1;
+      current->next_non_missing = -1;
+      unresolved[n_unresolved] = current;
+      n_unresolved++;
+
+    } else if ( n_unresolved > 0 ) {
+      
+      for ( int i = 0; i < n_unresolved; i++ ) {
+        unresolved[i]->next_non_missing = current->label;
+      }
+
+      n_unresolved = 0;
+
+    }
+
+    if ( current->is_default ) {
+      n_unnamed++;
+    } else {
+      current->name = CHAR(PRINTNAME(name));
+      n_named++;
+      *has_names = true;
     }
 
     idx++;
   }
 
-  return n_missing;
+  return true;
 
 }
 
-SEXP switch_names(SEXP e) {
+SEXP resolve_char_labels(SEXP cases, SwitchCase * processed, int default_label, int ** out_labels, int * out_count) {
+  int total = length(cases);
+  int n_used = 0;
+  
+  const char ** used_names = (const char **) R_alloc( total + 1, sizeof(const char*) );
+  int * jumps_arr = (int *) R_alloc( total + 1, sizeof(int) ); // Pure C array!
 
-  if ( length(e) == 0 ) {
-    return R_NilValue;
-    // TODO no switch cases edge case?
-  }
+  int char_default_target = default_label;
 
-  SEXP final_top = PROTECT( Rf_cons(R_NilValue, R_NilValue) );
-  SEXP final_iter = final_top;
-
-  for ( SEXP iter = e; iter != R_NilValue; iter = CDR(iter) ) {
-    if ( TAG(iter) != R_NilValue ) {
-
-      SETCAR( final_iter, TAG(iter) );
-      SETCDR( final_iter, Rf_cons(R_NilValue, R_NilValue) );
-      final_iter = CDR(final_iter);
-    
+  for ( int i = 0; i < total; i++ ) {
+    if ( processed[i].is_default ) {
+      if (char_default_target == default_label) {
+        char_default_target = (processed[i].next_non_missing == -1) ? default_label : processed[i].next_non_missing;
+      }
+    } else {
+      bool matches = false; 
+      for ( int j = 0; j < n_used; j++ ) {
+        if (strcmp( processed[i].name, used_names[j] ) == 0) {
+          matches = true;
+          break;
+        }
+      }
+      if ( !matches ) {
+        used_names[n_used] = processed[i].name;
+        jumps_arr[n_used] = (processed[i].next_non_missing == -1) ? default_label : processed[i].next_non_missing;
+        n_used++;
+      }
     }
   }
 
-  final_iter = R_NilValue;
+  used_names[n_used] = "";
+  jumps_arr[n_used] = char_default_target;
+  n_used++;
 
-  if ( final_top = R_NilValue ) {
-    // no named cases
+  SEXP names_sexp = PROTECT( allocVector( STRSXP, n_used ) );
+  for ( int i = 0; i < n_used; i++ ) {
+    SET_STRING_ELT( names_sexp, i, mkChar(used_names[i]) );
   }
 
-};
+  *out_labels = jumps_arr;
+  *out_count = n_used;
+
+  return names_sexp; // Caller must UNPROTECT(1)
+}
+
+int * resolve_num_labels(SEXP cases, SwitchCase * processed, int miss_label, int default_label, int * out_count) {
+  int total = length(cases);
+  *out_count = total + 1;
+  
+  int * jumps_arr = (int *) R_alloc( *out_count, sizeof(int) );
+
+  for ( int i = 0; i < total; i++ ) {
+    jumps_arr[i] = processed[i].is_missing ? miss_label : processed[i].label;
+  }
+  
+  jumps_arr[total] = default_label;
+
+  return jumps_arr;
+}
 
 bool inline_switch(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
@@ -4890,19 +5014,118 @@ bool inline_switch(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     return cmp_special(e, cb, cntxt);
   else {
 
-
     SEXP expr = CADR(e);
     SEXP cases = CDDR(e);
+    int end_label = -1;
 
-    if ( cases == R_NilValue ) {
-      //TODO notify no switch cases
+    if ( !cntxt->tailcall )
+      end_label = cb_makelabel(cb);
+
+    if ( length(cases) < 1 ) {
+      // TODO notify no switch cases
     }
 
-    int * missing = (int*) R_alloc( length(cases), sizeof(int) ); // alloc most possible missing cases
-    int n_missing = missing_args(cases, missing); // only fill up n missing
+    SwitchCase * processed_cases = (SwitchCase*) R_alloc( length(cases), sizeof(SwitchCase) );
 
-    SEXP names = switch_names(cases);
+    bool has_names = false;
+    bool okay = preprocess_cases( cases, processed_cases, cb, &has_names );
 
+    if ( ! okay ) {
+      cmp_special(e, cb, cntxt);
+      return true;
+    }
+
+    CompilerContext * ncntxt = make_non_tail_call_ctx(cntxt);
+    cmp( expr, cb, ncntxt, false, true );
+
+    int call_idx = cb_putconst(cb, e);
+
+    int names_idx = -1;
+    int null_idx = -1;
+    int char_count = 0;
+    int * char_labels_c = NULL; 
+
+    int default_label = cb_makelabel(cb);
+
+    if (has_names) {
+        SEXP names_sexp = resolve_char_labels(cases, processed_cases, default_label, &char_labels_c, &char_count);
+        names_idx = cb_putconst(cb, names_sexp);
+        UNPROTECT(1);
+    } else {
+        null_idx = cb_putconst(cb, R_NilValue);
+    }
+
+    bool any_miss = false;
+    int miss_label = -1;
+
+    for ( int i = 0; i < length(cases); i++ )
+      if ( processed_cases[i].is_missing ) any_miss = true;
+
+    if ( any_miss )
+      miss_label = cb_makelabel(cb);
+
+    int int_count = 0;
+    int * int_labels_c = resolve_num_labels(cases, processed_cases, miss_label, default_label, &int_count);
+
+    cb_putcode(cb, SWITCH_OP);
+    cb_putcode(cb, call_idx);
+
+    int char_pos = -1;
+
+    if ( has_names ) {
+        cb_putcode(cb, names_idx);
+        char_pos = cb->code_count; 
+        cb_putcode(cb, 0);         
+    } else {
+        cb_putcode(cb, null_idx); 
+        char_pos = cb->code_count;
+        cb_putcode(cb, null_idx);  
+    }
+
+    int int_pos = cb->code_count;  
+    
+    cb_putcode(cb, 0);             
+    cb_putswitch(cb, int_labels_c, int_count, int_pos, char_labels_c, char_count, char_pos);
+
+    if ( any_miss ) {
+
+      cb_putlabel(cb, miss_label);
+      SEXP stop_call = PROTECT(Rf_lang2(install("stop"), mkString("empty alternative in numeric switch")));
+      cmp(stop_call, cb, cntxt, false, true); 
+      UNPROTECT(1);
+    
+    }
+    
+    cb_putlabel(cb, default_label);
+    cb_putcode(cb, LDNULL_OP);
+
+    if (cntxt->tailcall) {
+        cb_putcode(cb, INVISIBLE_OP);
+        cb_putcode(cb, RETURN_OP);
+    } else {
+        cb_putcode(cb, GOTO_OP);
+        cb_putcodelabel(cb, end_label); 
+    }
+
+    for ( int i = 0; i < length(cases); i++ ) {
+      if ( ! processed_cases[i].is_missing ) {
+      
+        cb_putlabel(cb, processed_cases[i].label);
+        cmp( processed_cases[i].expr, cb, cntxt, false, true );
+
+        if ( ! cntxt->tailcall ) {
+          cb_putcode(cb, GOTO_OP);
+          cb_putcodelabel(cb, end_label);
+        }
+      
+      }
+    }
+
+    if ( ! cntxt->tailcall )
+      cb_putlabel(cb, end_label);
+
+
+    return true;
   }
 
 }
