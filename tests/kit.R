@@ -533,12 +533,11 @@ test_package <- function(package) {
 
 }
 
-fails <- function (elist, shadowed, cntxt) 
-{
-    return (T)
+dotcall <- function (elist, shadowed, cntxt) {
+    .Call("myfunction", a, b, c)
 }
 
-#x <- benchmark_compilers(fails)
-#print(x)
+x <- benchmark_compilers(dotcall)
+print(x)
 
-test_package("compiler")
+#test_package("compiler")

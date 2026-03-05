@@ -148,6 +148,7 @@ static int BCVersion;
 #define ISCHARACTER_OP 80
 #define ISSYMBOL_OP 81
 #define ISOBJECT_OP 82
+#define DOTCALL_OP 119
 
 #pragma endregion
 
@@ -432,6 +433,7 @@ bool inline_seq_len( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_dollar(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 bool cmp_dot_internal_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
+bool inline_c_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 
 bool inline_is_character(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 bool inline_is_complex(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
@@ -2556,6 +2558,7 @@ bool get_inline_handler( char name[256], char package[256], CompilerContext * cn
     INLINE_HANDLER_CASE("is.object", inline_is_object)
     INLINE_HANDLER_CASE("is.symbol", inline_is_symbol)
     INLINE_HANDLER_CASE("$", inline_dollar)
+    INLINE_HANDLER_CASE(".Call", inline_c_call)
 
     for (size_t i = 0; math1funs[i] != NULL; i++)
     {
@@ -4799,6 +4802,109 @@ bool inline_is_object(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 bool inline_is_symbol(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   return cmp_is(ISSYMBOL_OP, e, cb, cntxt);
+}
+
+bool inline_c_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  const int nargsmax = 16;
+
+  if ( dots_or_missing( CDR(e) ) || has_names(e)
+      || length(e) < 2 || length(e) > nargsmax + 2 )
+      return cmp_builtin(e, cb, cntxt, false);
+  else {
+
+    CompilerContext * ncntxt = make_non_tail_call_ctx(cntxt);
+    cmp(CADR(e), cb, ncntxt, false, true);
+    int nargs = length(e) - 2;
+    if ( nargs > 0 ) {
+      ncntxt = make_arg_ctx( cntxt );
+      
+      for ( SEXP iter = CDDR(e); iter != R_NilValue ; iter = CDR(iter) ) {
+        cmp( CAR(iter), cb, ncntxt, false, true );
+      }
+    }
+
+    int ci = cb_putconst(cb, e);
+    cb_putcode(cb, DOTCALL_OP);
+    cb_putcode(cb, ci);
+    cb_putcode(cb, nargs);
+
+    if (cntxt->tailcall)
+      cb_putcode(cb, RETURN_OP);
+
+    return true;
+
+  }
+
+}
+
+int missing_args(SEXP e, int * missing) {
+
+  int n_missing = 0;
+  int idx = 0;
+
+  for ( SEXP iter = e; iter != R_NilValue; iter = CDR(iter) ) {
+    if ( CAR(iter) == R_MissingArg ) {
+      missing[n_missing] = idx;
+      n_missing++; 
+    }
+
+    idx++;
+  }
+
+  return n_missing;
+
+}
+
+SEXP switch_names(SEXP e) {
+
+  if ( length(e) == 0 ) {
+    return R_NilValue;
+    // TODO no switch cases edge case?
+  }
+
+  SEXP final_top = PROTECT( Rf_cons(R_NilValue, R_NilValue) );
+  SEXP final_iter = final_top;
+
+  for ( SEXP iter = e; iter != R_NilValue; iter = CDR(iter) ) {
+    if ( TAG(iter) != R_NilValue ) {
+
+      SETCAR( final_iter, TAG(iter) );
+      SETCDR( final_iter, Rf_cons(R_NilValue, R_NilValue) );
+      final_iter = CDR(final_iter);
+    
+    }
+  }
+
+  final_iter = R_NilValue;
+
+  if ( final_top = R_NilValue ) {
+    // no named cases
+  }
+
+};
+
+bool inline_switch(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
+
+  if ( length(e) < 2 || any_dots(e) )
+    return cmp_special(e, cb, cntxt);
+  else {
+
+
+    SEXP expr = CADR(e);
+    SEXP cases = CDDR(e);
+
+    if ( cases == R_NilValue ) {
+      //TODO notify no switch cases
+    }
+
+    int * missing = (int*) R_alloc( length(cases), sizeof(int) ); // alloc most possible missing cases
+    int n_missing = missing_args(cases, missing); // only fill up n missing
+
+    SEXP names = switch_names(cases);
+
+  }
+
 }
 
 #pragma endregion
