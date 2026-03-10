@@ -7,7 +7,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-// #define DEBUG
+//#define DEBUG
 #define END_OPCODES -1
 
 extern SEXP R_TrueValue;
@@ -1337,13 +1337,16 @@ VarInfo find_cenv_var(SEXP var, CompilerEnv* cenv) {
         (TYPEOF(current->extra_vars) == STRSXP)) {
       int n = Rf_length(current->extra_vars);
       for (int i = 0; i < n; i++) {
+
         const char* extra = CHAR(STRING_ELT(current->extra_vars, i));
+      
         if (strcmp(var_name, extra) == 0) {
           info.defining_frame = current;
           info.env = current->r_env; 
           info.found = true;
           return info;
         }
+      
       }
     }
 
@@ -1427,9 +1430,9 @@ static SEXP union_sets(SEXP a, SEXP b) {
 
   SEXP call = PROTECT(Rf_lang3(Rf_install("union"), a, b));
   SEXP res = Rf_eval(call, R_BaseEnv);
-  UNPROTECT(1);
-    
-    return res;
+  
+  UNPROTECT(1);  
+  return res;
 }
 
 SEXP find_locals_list( SEXP elist, SEXP known_locals ) {
@@ -1632,8 +1635,6 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
 
   }
 
-
-  add_cenv_frame( new_cenv, arg_names );
   add_cenv_vars( new_cenv, locals );  
 
   UNPROTECT(2); // locals, shadow_stack
@@ -2761,7 +2762,8 @@ bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   if ( length(e) > 3)
     sref = CADDDR( e );
 
-  CompilerContext * ncntxt = make_function_ctx( cntxt, cntxt->env, formals, body );
+  CompilerEnv * fenv = make_fun_env(formals, body, cntxt);
+  CompilerContext * ncntxt = make_function_ctx( cntxt, fenv, formals, body );
 
   if ( may_call_browser( body, ncntxt ) ) {
     DEBUG_PRINT("!! inline_function_handler: Function may call browser, skipping inlining\n");
