@@ -131,7 +131,7 @@ dump_all_bytecode <- function(bc, filename) {
   dump_recursive(bc, "Root")
 }
 
-benchmark_compilers <- function(prog, dump_bytecode = TRUE) {
+benchmark_compilers <- function(prog, iters = 10, dump_bytecode = TRUE) {
 
   if (!requireNamespace("compiler", quietly = TRUE)) stop("Package 'compiler' is required.")
   if (!requireNamespace("crbcc", quietly = TRUE)) stop("Package 'crbcc' is required.")
@@ -140,15 +140,15 @@ benchmark_compilers <- function(prog, dump_bytecode = TRUE) {
   times_crbcc <- numeric(10)
   
   # 1. Benchmark compiler::cmpfun 
-  for (i in 1:10) {
+  for (i in 1:iters) {
     start_time <- Sys.time()
-    res_compiler <- compiler::cmpfun(prog, options=list(optimize=3)) 
+    res_compiler <- compiler::cmpfun(prog, options=list(optimize=2)) 
     end_time <- Sys.time()
     times_compiler[i] <- as.numeric(difftime(end_time, start_time, units = "secs"))
   }
 
   # 2. Benchmark crbcc::cmpfun
-  for (i in 1:10) {
+  for (i in 1:iters) {
     start_time <- Sys.time()
     res_crbcc <- crbcc::cmpfun(prog)
     end_time <- Sys.time()
@@ -474,6 +474,27 @@ benchmarked_fn <- function() {
       "Outer default reached"
     )
   }
+
+  stats <- function(n) {
+
+    noise <- rnorm(n, mean = 0, sd = 1)
+    baseline <- runif(n, min = 0, max = 10)
+    return(baseline + noise)
+
+  }
+
+  stats_shadowed <- function() {
+
+    rnorm <- function(n, mean, sd) {
+      print("Shadowed rnorm called!")
+      return(rep(0, n))
+    }
+    noise <- rnorm(n, mean = 0, sd = 1)
+    baseline <- runif(n, min = 0, max = 10)
+    return(baseline + noise)
+
+  }
+
 }
 
 test_package <- function(package) {
@@ -502,7 +523,7 @@ test_package <- function(package) {
     cat(sprintf("Compiling %s...\n", func_id))
     
     tryCatch({
-      res <- benchmark_compilers(uncompiled_funs[[i]])
+      res <- benchmark_compilers(uncompiled_funs[[i]], 1, FALSE)
       
 
       if (!isTRUE(res$bytecode_identical)) {
@@ -548,8 +569,7 @@ test_package <- function(package) {
 
 }
 
-
-#x <- benchmark_compilers(benchmarked_fn)
-#print(x)
+x <- benchmark_compilers(benchmarked_fn)
+print(x)
 
 test_package("compiler")
