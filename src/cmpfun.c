@@ -268,11 +268,12 @@ typedef struct SwitchPatch {
 
 } SwitchPatch;
 
-typedef struct VarInfo {
+typedef struct {
 
-  EnvFrame * defining_frame;      // Frame where the variable is defined
-  SEXP value;                     // var value
-  bool found;                     // Was the variable found
+  EnvFrame* defining_frame;
+  SEXP env;
+  SEXP value;
+  bool found;
 
 } VarInfo;
 
@@ -285,6 +286,12 @@ typedef struct Loc {
 
 typedef bool (*HandlerFn)(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 typedef bool (*SetterHandlerFn)(SEXP afun, SEXP place, SEXP origplace, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
+
+typedef enum {
+  BASE,
+  STAT,
+  NO
+} Inline;
 
 typedef struct InlineHandler {
 
@@ -307,7 +314,7 @@ typedef struct InlineInfo {
   bool can_inline;                // Can this function be inlined
   bool guard_needed;              // Is a type guard needed
 
-  char package[256];              // Package name
+  Inline in;
 
 } InlineInfo;
 
@@ -332,6 +339,7 @@ int cb_makelabel(CodeBuffer *cb);
 void cb_putlabel(CodeBuffer *cb, int label_id);
 void cb_patchlabels(CodeBuffer *cb);
 void ensure_label_capacity(LabelTable *lt, int needed_index);
+void cb_putcodelabel(CodeBuffer * cb, int label_id);
 
 // Code emission and constant pool management
 void cb_putcode(CodeBuffer *cb, int opcode);
@@ -392,7 +400,7 @@ bool any_dots( SEXP args );
 // Inlining
 bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 InlineInfo get_inline_info( char name[256], CompilerContext * cntxt, bool guard_ok );
-bool get_inline_handler( char name[256], char package[256], CompilerContext * cntxt, HandlerFn * found );
+bool get_inline_handler( char name[256], Inline in, CompilerContext * cntxt, HandlerFn * found );
 void pack_frame_name(EnvFrame * frame, char out[256] );
 
 #pragma endregion
@@ -512,6 +520,16 @@ static const char *fold_funs[] = {
     "baseenv", "emptyenv", "globalenv",
     "Arg", "Conj", "Im", "Mod", "Re",
     NULL
+};
+
+static const char *language_funs[] = {
+  "^", "~", "<", "<<-", "<=", "<-", "=", "==", ">", ">=",
+  "|", "||", "-", ":", "!", "!=", "/", "(", "[", "[<-", "[[",
+  "[[<-", "{", "@", "$", "$<-", "*", "&", "&&", "%/%", "%*%",
+  "%%", "+", "::", ":::", "@<-",
+  "break", "for", "function", "if", "next", "repeat", "while",
+  "local", "return", "switch",
+  NULL
 };
 
 static bool is_const_mode(SEXP e) {
@@ -854,94 +872,123 @@ bool any_dots( SEXP args ) {
 };
 
 
-InlineInfo get_inline_info( char name[256], CompilerContext * cntxt, bool guard_ok ) {
-/*
+InlineInfo get_inline_info(char name[256], CompilerContext* cntxt,
+                           bool guard_ok) {
   InlineInfo ret;
   ret.can_inline = false;
+  ret.guard_needed = false;
+  ret.in = NO;
 
-  short optimize = cntxt->optimize_level;
-  SEXP name_wrapped = PROTECT(Rf_mkChar( name ));
+  if (cntxt->optimize_level == 0 || strcmp(name, "standardGeneric") == 0)
+    return ret;
 
-  if ( optimize > 0 && ! ( is_in_set( name_wrapped, R_NilValue ) ) ) {
+  VarInfo info = find_cenv_var(install(name), cntxt->env);
 
-    VarInfo info = find_cenv_var( name_wrapped, cntxt->env );
-    if ( ! info.found )
-      return ret;
+  if (!info.found || info.env == NULL) {
+    return ret;
+  }
 
-    EnvFrame * defining_frame = info.defining_frame;
-    FrameType ftype = defining_frame->type;
+  SEXP from = info.env;
 
-    //if ( ftype == FRAME_NAMESPACE )
-    if ( R_IsNamespaceEnv( defining_frame->r_env ) ) {
+  bool is_namespace = R_IsNamespaceEnv(from);
+  bool is_base = false;
+  bool is_stat = false;
 
-      SEXP top_level_env = cntxt->env->top_frame->r_env;
-      if ( ! R_IsNamespaceEnv( top_level_env ) ||
-           ! IDENTICAL( defining_frame->r_env, R_ParentEnv( top_level_env ) )) {
-             //context stop idk
-
-           }
-
-      defining_frame = cntxt->env->top_frame;
-
+  if (is_namespace) {
+    // It's an internal namespace hit
+    is_base = (from == R_BaseNamespace);
+    if (!is_base) {
+      SEXP spec = R_NamespaceEnvSpec(from);
+      if (TYPEOF(spec) == STRSXP && LENGTH(spec) > 0) {
+        is_stat = (strcmp(CHAR(STRING_ELT(spec, 0)), "stats") == 0);
+      }
     }
+  } else {
 
-    ret.package = ///// LEFT OFF HERE
+    is_base = (from == R_BaseEnv);
+
+    is_stat = false;
+    if (R_IsPackageEnv(from)) {
+      SEXP pkg_name = R_PackageEnvName(from);
+      if (TYPEOF(pkg_name) == STRSXP && LENGTH(pkg_name) > 0) {
+        is_stat = (strcmp(CHAR(STRING_ELT(pkg_name, 0)), "package:stats") == 0);
+      }
+    }
 
   }
 
-  UNPROTECT(1); //name_wrapped
-  return ret;*/
+  if (!is_base && !is_stat) {
+    return ret;
+  }
 
-  InlineInfo ret;
-  ret.can_inline = true;
-  ret.guard_needed = false;
-  ret.env = R_BaseEnv;
-  strncpy(ret.package, "base\0", 5);
+  if (is_namespace) {
+    // Level 1+ allows namespace hits without guards
+    ret.can_inline = true;
+    ret.guard_needed = false;
+    ret.in = is_base ? BASE : STAT;
+    ret.env = from;
+  } else {
+    // It's a global hit. Check optimization levels 2 and 3.
+    if (cntxt->optimize_level >= 3 ||
+        (cntxt->optimize_level >= 2 && is_in_c_set(name, language_funs))) {
+      // Level 3, or Level 2 + core language function: No guard needed
+      ret.can_inline = true;
+      ret.guard_needed = false;
+      ret.in = is_base ? BASE : STAT;
+      ret.env = from;
+    } else if (guard_ok && is_base) {
+      // Level 2 + normal base function + guard is allowed
+      ret.can_inline = true;
+      ret.guard_needed = true;
+      ret.in = BASE;
+      ret.env = from;
+    }
+  }
 
   return ret;
-};
+}
 
-
-bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+bool try_inline(SEXP e, CodeBuffer* cb, CompilerContext* cntxt) {
 
   char name[256];
-  strncpy( name, CHAR(PRINTNAME(CAR(e))), 255 );
-  
-  InlineInfo info = get_inline_info( name, cntxt, true );
+  strncpy(name, CHAR(PRINTNAME(CAR(e))), 255);
 
-  if ( ! info.can_inline )
-    return false;
+  InlineInfo info = get_inline_info(name, cntxt, true);
+
+  if (!info.can_inline) return false;
 
   HandlerFn handler = NULL;
 
-  if( ! get_inline_handler( name, info.package, cntxt, &handler ) )
-    return false;
+  if (!get_inline_handler(name, info.in, cntxt, &handler)) return false;
 
-  DEBUG_PRINT(">> Inlining function '%s' from package '%s'\n", name, info.package);
+  DEBUG_PRINT(">> Inlining function '%s' \n");
 
-  if ( info.guard_needed ) {
-
+  if (info.guard_needed) {
     bool tailpos = cntxt->tailcall;
-    if ( tailpos ) cntxt->tailcall = false;
+    if (tailpos) cntxt->tailcall = false;
 
-    int expridx = cb_putconst( cb, e );
-    int endlabel = cb_makelabel( cb );
-    cb_putcode( cb, BASEGUARD_OP );
-    cb_putcode( cb, expridx );
-    cb_putcode( cb, endlabel );
-    if (! handler(e, cb, cntxt))
+    int expridx = cb_putconst(cb, e);
+    int endlabel = cb_makelabel(cb);
+
+    cb_putcode(cb, BASEGUARD_OP);
+    cb_putcode(cb, expridx);
+    cb_putcodelabel(cb, endlabel);
+
+    if (!handler(e, cb, cntxt))
       cmp_call(e, cb, cntxt, false);
 
     cb_putlabel(cb, endlabel);
-    if ( tailpos ) cb_putcode(cb, RETURN_OP);
+
+    if (tailpos) {
+      cb_putcode(cb, RETURN_OP);
+      cntxt->tailcall = true;
+    }
+
     return true;
-  
   }
-  
-  return handler( e, cb, cntxt );
 
-};
-
+  return handler(e, cb, cntxt);
+}
 
 void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, int * char_labels, int char_count, int char_pos) {
 
@@ -1253,24 +1300,26 @@ bool find_loc_var( SEXP var, CompilerContext * cntxt ) {
   }
 
 }
-VarInfo find_cenv_var( SEXP var, CompilerEnv * cenv ) {
 
-  VarInfo info = { NULL, R_NilValue, false };
-  const char* var_name = CHAR( PRINTNAME( var ) );
+VarInfo find_cenv_var(SEXP var, CompilerEnv* cenv) {
 
-  EnvFrame * current = cenv->top_frame;
+  VarInfo info = {NULL, R_NilValue, R_NilValue, false};
+  const char* var_name = CHAR(PRINTNAME(var));
+
+  EnvFrame* current = cenv->top_frame;
   SEXP last_env = R_NilValue;
 
-  // Walk up the compiler environment frames
-  while ( current != NULL ) {
-
+  // 1. Walk up the compiler environment frames
+  while (current != NULL) {
     // Check if its in extra_vars
-    if ( (current->extra_vars != R_NilValue) && (TYPEOF(current->extra_vars) == STRSXP) ) {
-      int n = Rf_length( current->extra_vars );
-      for ( int i = 0; i < n; i++ ) {
-        const char* extra = CHAR( STRING_ELT( current->extra_vars, i ) );
-        if ( strcmp( var_name, extra ) == 0 ) {
+    if ((current->extra_vars != R_NilValue) &&
+        (TYPEOF(current->extra_vars) == STRSXP)) {
+      int n = Rf_length(current->extra_vars);
+      for (int i = 0; i < n; i++) {
+        const char* extra = CHAR(STRING_ELT(current->extra_vars, i));
+        if (strcmp(var_name, extra) == 0) {
           info.defining_frame = current;
+          info.env = current->r_env; 
           info.found = true;
           return info;
         }
@@ -1278,9 +1327,10 @@ VarInfo find_cenv_var( SEXP var, CompilerEnv * cenv ) {
     }
 
     // Check if its in runtime environment for this specific frame
-    SEXP val = Rf_findVarInFrame3( current->r_env, var, TRUE );
-    if ( val != R_UnboundValue ) {
+    SEXP val = Rf_findVarInFrame3(current->r_env, var, TRUE);
+    if (val != R_UnboundValue) {
       info.defining_frame = current;
+      info.env = current->r_env;
       info.value = val;
       info.found = true;
       return info;
@@ -1290,21 +1340,23 @@ VarInfo find_cenv_var( SEXP var, CompilerEnv * cenv ) {
     current = current->parent;
   }
 
+  // 2. Search the remaining environment frames
   if (last_env != R_NilValue) {
-      SEXP env = ENCLOS(last_env);
-      while (env != R_NilValue && env != R_EmptyEnv) {
-          SEXP val = Rf_findVarInFrame3(env, var, TRUE);
-          if (val != R_UnboundValue) {
-              info.defining_frame = NULL;
-              info.value = val;
-              info.found = true;
-              return info;
-          }
-          env = ENCLOS(env);
+    SEXP env = ENCLOS(last_env);
+    while (env != R_NilValue && env != R_EmptyEnv) {
+      SEXP val = Rf_findVarInFrame3(env, var, TRUE);
+      if (val != R_UnboundValue) {
+        info.defining_frame = NULL;  
+        info.env = env;
+        info.value = val;
+        info.found = true;
+        return info;
       }
+      env = ENCLOS(env);
+    }
   }
 
-  return info; // Not found
+  return info;  // Not found
 }
 
 SEXP get_assigned_var( SEXP var ) {
@@ -1577,7 +1629,7 @@ CompilerContext * make_toplevel_ctx( CompilerEnv *cenv ) {
   ctx->toplevel = true;
   ctx->tailcall = true;
   ctx->need_return_jmp = false;
-  ctx->optimize_level = 0; // Defaulting to 0 because no inlining yet
+  ctx->optimize_level = 2;
 
   // TODO compiler options later to be passed as argument in this fn
   ctx->supress_all = false;
@@ -2520,9 +2572,9 @@ bool cmp_builtin_default( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   return cmp_builtin( e,cb,cntxt,false );
 }
 
-bool get_inline_handler( char name[256], char package[256], CompilerContext * cntxt, HandlerFn * found ) {
+bool get_inline_handler( char name[256], Inline in, CompilerContext * cntxt, HandlerFn * found ) {
 
-  if (strcmp(package, "base") == 0) {
+  if ( in == BASE ) {
     INLINE_HANDLER_CASE("{", inline_left_brace)
     INLINE_HANDLER_CASE("function", inline_function)
     INLINE_HANDLER_CASE("return", inline_return)
@@ -2596,7 +2648,7 @@ bool get_inline_handler( char name[256], char package[256], CompilerContext * cn
   
   }
 
-  if (strcmp(package, "stats") == 0) {
+  if ( in == STAT ) {
 
     for (size_t i = 0; safe_stats_internals[i] != NULL; i++) {
       if (strcmp(name, safe_stats_internals[i]) == 0) {
@@ -2627,9 +2679,9 @@ bool get_inline_handler( char name[256], char package[256], CompilerContext * cn
 
 }
 
-bool get_setter_inline_handler( char name[256], char package[256], SetterHandlerFn * found ) {
+bool get_setter_inline_handler( char name[256], Inline in, SetterHandlerFn * found ) {
 
-  if (strcmp(package, "base") == 0) {
+  if (in == BASE) {
     INLINE_HANDLER_CASE("$<-", dollar_setter_inline_handler)
     INLINE_HANDLER_CASE("@<-", at_setter_inline_handler)
     INLINE_HANDLER_CASE("[<-", inline_subassign_setter)
@@ -2641,9 +2693,9 @@ bool get_setter_inline_handler( char name[256], char package[256], SetterHandler
 }
 
 // TODO only one case?kill
-bool get_getter_inline_handler( char name[256], char package[256], HandlerFn * found ) {
+bool get_getter_inline_handler( char name[256], Inline in, HandlerFn * found ) {
 
-  if (strcmp(package, "base") == 0) {
+  if (in == BASE) {
     INLINE_HANDLER_CASE("$", dollar_getter_inline_handler)
     INLINE_HANDLER_CASE("[", inline_subset_getter)
     INLINE_HANDLER_CASE("[[", inline_subset2_getter)
@@ -3502,7 +3554,7 @@ bool try_getter_inline(SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
   } else {
 
     HandlerFn h;
-    bool found = get_getter_inline_handler(name, info.package, &h);
+    bool found = get_getter_inline_handler(name, info.in, &h);
 
     if (found) {
       return h(call, cb, cntxt);
@@ -3527,7 +3579,7 @@ bool try_setter_inline(SEXP afun, SEXP place, SEXP origplace, SEXP call,
   } else {
 
     SetterHandlerFn h;
-    bool found = get_setter_inline_handler(name, info.package, &h);
+    bool found = get_setter_inline_handler(name, info.in, &h);
 
     if (found) {
       return h(afun, place, origplace, call, cb, cntxt);
