@@ -1246,7 +1246,7 @@ bool check_call(SEXP def, SEXP call) {
     n_protect += 2;
   }
 
-  for (SEXP runner = CDR(call); runner != R_NilValue; runner = CDR(runner)) {
+  SEQ_ALONG( runner, CDR(call) ) {
     if (CAR(runner) == R_DotsSymbol) {
       UNPROTECT(n_protect);
       return false;
@@ -1425,13 +1425,43 @@ static bool is_in_set(SEXP sym, SEXP set) {
 
 static SEXP union_sets(SEXP a, SEXP b) {
 
-  if (a == R_NilValue) return b;
-  if (b == R_NilValue) return a;
+  if (a == R_NilValue || Rf_length(a) == 0) return b;
+  if (b == R_NilValue || Rf_length(b) == 0) return a;
 
-  SEXP call = PROTECT(Rf_lang3(Rf_install("union"), a, b));
-  SEXP res = Rf_eval(call, R_BaseEnv);
-  
-  UNPROTECT(1);  
+  int len_a = Rf_length(a);
+  int len_b = Rf_length(b);
+  int max_len = len_a + len_b;
+
+  SEXP *buffer = (SEXP *) R_chk_calloc(max_len, sizeof(SEXP));
+  int count = 0;
+
+  for (int i = 0; i < len_a; i++) {
+    buffer[count++] = STRING_ELT(a, i);
+  }
+
+  for (int i = 0; i < len_b; i++) {
+    SEXP val_b = STRING_ELT(b, i);
+    bool found = false;
+    
+    for (int j = 0; j < len_a; j++) {
+      if (buffer[j] == val_b) { 
+        found = true;
+        break;
+      }
+    }
+    
+    if (!found) {
+      buffer[count++] = val_b;
+    }
+  }
+
+  SEXP res = PROTECT(Rf_allocVector(STRSXP, count));
+  for (int i = 0; i < count; i++) {
+    SET_STRING_ELT(res, i, buffer[i]);
+  }
+
+  R_chk_free(buffer);
+  UNPROTECT(1);
   return res;
 }
 
