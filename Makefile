@@ -21,7 +21,7 @@ all: install
 
 .PHONY: install
 install:
-	bear -- $(R) CMD INSTALL .
+	bear -- env CFLAGS="-g -O2 -fno-omit-frame-pointer" $(R) CMD INSTALL .
 
 .PHONY: clean
 clean:
