@@ -520,7 +520,7 @@ test_package <- function(package) {
   for (i in seq_along(uncompiled_funs)) {
     
     func_id <- names(uncompiled_funs)[i]
-    cat(sprintf("Compiling %s...\n", func_id))
+    #cat(sprintf("Compiling %s...\n", func_id))
     
     tryCatch({
       res <- benchmark_compilers(uncompiled_funs[[i]], 1, FALSE)
@@ -537,7 +537,7 @@ test_package <- function(package) {
         system("clear")
         
       } else {
-        cat("[OK]\n")
+        #cat("[OK]\n")
         compiled_ok <- compiled_ok + 1
         
         if (!is.null(res$speedup)) {
@@ -564,12 +564,14 @@ test_package <- function(package) {
 
   avg_speedup <- if (length(speedups) > 0) mean(speedups) else NA
   
-  cat(sprintf("\n[SUCCESS] All %d functions compiled perfectly!\n", compiled_ok))
-  cat(sprintf("[PERFORMANCE] Average compiler speedup: %.2fx\n", avg_speedup))
+  cat(sprintf("\n[OK] %d functions compiled identically\n", compiled_ok))
+  cat(sprintf("[PERF] Average compiler speedup: %.2fx\n", avg_speedup))
 
 }
 
-x <- benchmark_compilers(benchmarked_fn)
-print(x)
+packages = c("base", "compiler", "stats", "tools", "utils")
 
-test_package("compiler")
+for (i in packages) {
+  cat(sprintf("\n[START] Compiling package: %s ", i))
+  test_package(i)
+}
