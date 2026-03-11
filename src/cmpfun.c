@@ -1385,24 +1385,23 @@ SEXP get_assigned_var( SEXP var ) {
 
   SEXP v = CADR( var );
 
-  if ( v == R_NilValue ) {
+  if ( v == R_MissingArg ) {
     Rf_error("Bad assignment");
     return R_NilValue; 
   }
 
+   
+
   // Handle strings and symbols
-  if ( TYPEOF( v ) == SYMSXP ) {
-    return Rf_ScalarString( PRINTNAME(v) ); // Return STRSXP
-  } 
-  else if ( TYPEOF( v ) == CHARSXP ) {
-    return Rf_ScalarString( v ); // Return STRSXP
-  } 
+  if ( TYPEOF( v ) == SYMSXP ) return Rf_ScalarString( PRINTNAME(v) );
+  else if ( TYPEOF( v ) == STRSXP && Rf_length(v) > 0  ) return Rf_ScalarString( STRING_ELT(v, 0) );
+  else if ( TYPEOF( v ) == CHARSXP ) return Rf_ScalarString( v );
   else {
     // Handle complex assignments names(x) <- 1
     while ( TYPEOF( v ) == LANGSXP ) {
       if ( Rf_length( v ) < 2 ) Rf_error("Bad assignment");
       v = CADR( v );
-      if ( v == R_NilValue ) Rf_error("Bad assignment");
+      if ( v == R_MissingArg ) Rf_error("Bad assignment");
     }
 
     if ( TYPEOF( v ) != SYMSXP ) Rf_error("Bad assignment");
