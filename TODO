@@ -1,13 +1,3 @@
-figure out how to make check_call normal
+Caught GC issue (segfault) when compiling tools package
 
-TODO test if safe_stats_internals are being inlined
-TODO install default BUILTIN and SPECIAL handlers. How? idk
-Also checking the .Internal things need more attention its not tested enough
-
-TODO traversal of the compilation frames to figure out from which package a concrete call should originate
-TODO return cmp special when calling it in inliners despite it only returning true its ugly
-TODO inline .Call
-TODO BUILTIN and SPECIALS are not being procdd
-
-optimization note: sometimes i think the compiler now uses Rs internal functions / data types,
-when it could be using its own representations. This is not ideal
+R -d "valgrind --tool=memcheck --leak-check=full" -f ./tests/kit.R
