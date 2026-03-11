@@ -4724,12 +4724,11 @@ bool cmp_dot_internal_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   }
   
   if (is_builtin) {
-    cmp_builtin(ee, cb, cntxt, true);
+    return cmp_builtin(ee, cb, cntxt, true);
   } else {
-    cmp_special(e, cb, cntxt);
+    return cmp_special(e, cb, cntxt);
   }
   
-  return true;
 }
 
 bool inline_local(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
