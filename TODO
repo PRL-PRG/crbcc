@@ -1,12 +1,1 @@
-Caught GC issue (segfault) when compiling tools package
-
-R -d "valgrind --tool=memcheck --leak-check=full" -f ./tests/kit.R
-
-
-    TODO
-
-
-    No need to protect R_Env in EnvFrame, it is part of the AST
-    No need to protect extra_vars, same reason
-
-    Make union_sets be a C array (GC safe), its items are protected from the AST
+-
