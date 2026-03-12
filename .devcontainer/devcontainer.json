@@ -4,6 +4,12 @@
     "dockerfile": "../Dockerfile",
     "context": ".."
   },
+  "capAdd": [
+    "SYS_ADMIN"
+  ],
+  "securityOpt": [
+    "seccomp=unconfined"
+  ],
   "customizations": {
     "vscode": {
       "extensions": [

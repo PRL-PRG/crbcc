@@ -1,7 +1,7 @@
 Package: crbcc
 Title: C R Bytecode Compiler
 Version: 0.1.0
-Authors@R: person("Author", "Name", email = "author@example.com", role = c("aut", "cre"))
+Authors@R: person("Author", "Josef Malý", email = "malyjos4@fit.cvut.cz", role = c("aut", "cre"))
 Description: R bytecode compiler implemented in C.
 License: GPL (>= 2)
 Encoding: UTF-8
