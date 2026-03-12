@@ -909,9 +909,11 @@ InlineInfo get_inline_info(char name[256], CompilerContext* cntxt, bool guard_ok
 
   VarInfo info = find_cenv_var(install(name), cntxt->env);
 
-  if (!info.found || info.env == NULL) {
+  if (!info.found || info.env == NULL)
     return ret;
-  }
+
+  if (info.defining_frame != NULL && info.defining_frame->type == FRAME_LOCAL)
+    return ret;
 
   SEXP from = info.env;
 
@@ -1206,7 +1208,7 @@ static bool is_base_var(SEXP sym, CompilerContext *cntxt) {
 
   InlineInfo info = get_inline_info( CHAR(PRINTNAME(sym)), cntxt, false );
   return ( info.can_inline &&
-    ( info.env == R_BaseEnv || info.env == R_BaseNamespace) ) ; 
+    ( info.env == R_BaseEnv || info.env == R_BaseNamespace) );
 
 };
 
@@ -1326,66 +1328,40 @@ bool find_loc_var( SEXP var, CompilerContext * cntxt ) {
 }
 
 VarInfo find_cenv_var(SEXP var, CompilerEnv* cenv) {
-
+  
   VarInfo info = {NULL, R_NilValue, R_NilValue, false};
   const char* var_name = CHAR(PRINTNAME(var));
-
   EnvFrame* current = cenv->top_frame;
-  SEXP last_env = R_NilValue;
 
   while (current != NULL) {
-
     if (current->extra_vars.count != 0) {
-      
-      int n = current->extra_vars.count;
-
-      for (int i = 0; i < n; i++) {
-
-        const char* extra = current->extra_vars.vars[i];
-      
-        if (strcmp(var_name, extra) == 0) {
+      for (int i = 0; i < current->extra_vars.count; i++) {
+        if (strcmp(var_name, current->extra_vars.vars[i]) == 0) {
           info.defining_frame = current;
-          info.env = cenv->r_env; 
+          info.env = R_NilValue;         
           info.found = true;
           return info;
         }
-      
       }
     }
-
-    if ( cenv->r_env != R_NilValue ) {
-      SEXP val = Rf_findVarInFrame3(cenv->r_env, var, TRUE);
-      if (val != R_UnboundValue) {
-        info.defining_frame = current;
-        info.env = cenv->r_env;
-        info.value = val;
-        info.found = true;
-        return info;
-      }
-    }
-
-    last_env = cenv->r_env;
     current = current->parent;
   }
 
-  if (last_env != R_NilValue) {
-    SEXP env = ENCLOS(last_env);
-    while (env != R_NilValue && env != R_EmptyEnv) {
-      SEXP val = Rf_findVarInFrame3(env, var, TRUE);
-      if (val != R_UnboundValue) {
-        info.defining_frame = NULL;  
-        info.env = env;
-        info.value = val;
-        info.found = true;
-        return info;
-      }
-      env = ENCLOS(env);
+  SEXP env = cenv->r_env;
+  while (env != R_NilValue && env != R_EmptyEnv) {
+    SEXP val = Rf_findVarInFrame3(env, var, FALSE); // TODO why did TRUE not work
+    if (val != R_UnboundValue) {
+      info.defining_frame = NULL;
+      info.env = env;
+      info.value = val;
+      info.found = true;
+      return info;
     }
+    env = ENCLOS(env);
   }
 
   return info;  // Not found
 }
-
 const char * get_assigned_var( SEXP var ) {
 
   SEXP v = CADR( var );
@@ -1850,6 +1826,7 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
   cb->const_count = 0;
 
   cb->switch_patches = NULL;
+  cb->patch_tail = NULL;
 
   // Initialize label table
   LabelTable lt;
