@@ -1,5 +1,3 @@
-compare_bytecode_strict <- function(bc1, bc2, path = "Root") {
-  
 benchmarked_fn <- function() { 
 
   test_arithmetic <- function(x, y, z) {
@@ -525,9 +523,9 @@ test_package <- function(package, torture=FALSE) {
     
     func_id <- names(uncompiled_funs)[i]
     cat(sprintf("Compiling %s...\n", func_id))
-    
+
     tryCatch({
-      res <- benchmark_compilers(uncompiled_funs[[i]], 1, FALSE, torture)
+      res <- benchmark_compilers(uncompiled_funs[[i]], 10, FALSE, torture)
       
 
       if (!isTRUE(res$bytecode_identical)) {
@@ -573,12 +571,11 @@ test_package <- function(package, torture=FALSE) {
 
 }
 
-# packages = c("tools", "base", "compiler", "stats", "utils")
+packages = c("compiler", "tools", "base", "stats", "utils")
 
-# for (i in packages) {
-#   cat(sprintf("\n[START] Compiling package: %s ", i))
-#   test_package(i)
-# }
+for (i in packages) {
+  cat(sprintf("\n[START] Compiling package: %s ", i))
+  test_package(i)
+}
 
-
-benchmark_compilers(benchmarked_fn, 1, FALSE, TRUE)
+#benchmark_compilers( benchmarked_fn )

@@ -189,7 +189,7 @@ typedef struct CompilerContext {
 
   // Other structures
   struct CompilerEnv *env;        // Current compilation environment
-  struct LoopInfo loop;          // Current loop context (NULL if not in a loop)
+  struct LoopInfo loop;           // Current loop context (NULL if not in a loop)
   
   SEXP call;                      //Current R call being compiler (used for error messages)
 
@@ -203,23 +203,25 @@ typedef enum {
 
 } FrameType;
 
+typedef struct ExtraVars {
+
+  const char ** vars;
+  int count;
+
+} ExtraVars;
+
 typedef struct EnvFrame {
 
   FrameType type;         
-  SEXP r_env;                     // R environment object
-  SEXP extra_vars;                // Vector of local variables discovered by the compiler
+  ExtraVars extra_vars;           // Vector of local variables discovered by the compiler
   struct EnvFrame *parent;        // Pointer to parent frame
-
-  SEXP shadow_node;               // For GC safety, holds r_env and extra_vars,
-                                  // lives inside the CompilerEnv shadow stack
-                                  // which is protected
 
 } EnvFrame;
 
 typedef struct CompilerEnv {
 
   struct EnvFrame *top_frame;     // Current frame being compiled
-  SEXP shadow_stack;              // Handle for GC safety
+  SEXP r_env;                     // R environment object
 
 } CompilerEnv;
 
@@ -374,8 +376,8 @@ CompilerContext *make_arg_ctx(CompilerContext *cntxt);
 CompilerContext *make_promise_ctx(CompilerContext *cntxt);
 
 // Environment manipulation
-void add_cenv_vars(CompilerEnv *cenv, SEXP vars);
-void add_cenv_frame(CompilerEnv *cenv, SEXP vars);
+void add_cenv_vars(CompilerEnv *cenv, ExtraVars vars);
+void add_cenv_frame(CompilerEnv *cenv, ExtraVars vars);
 
 // === Compilation functions ===
 void cmp(SEXP e, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok, bool setloc);
@@ -392,10 +394,10 @@ SEXP cmpfun(SEXP f, void* __placeholder__);
 
 // Weird ahh functions
 bool find_var(SEXP var, CompilerContext *cntxt);
-SEXP find_locals(SEXP expr, SEXP known_locals);
-SEXP find_locals_list(SEXP elist, SEXP known_locals);
+ExtraVars find_locals(SEXP expr, ExtraVars known_locals);
+ExtraVars find_locals_list(SEXP elist, ExtraVars known_locals);
 SEXP gen_code(SEXP e, CompilerContext *cntxt, SEXP gen, Loc loc);
-SEXP get_assigned_var(SEXP var);
+const char * get_assigned_var( SEXP var );
 bool may_call_browser(SEXP expr, CompilerContext *cntxt);
 bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt);
 SEXP is_compiled(SEXP fun);
@@ -410,7 +412,7 @@ bool any_dots( SEXP args );
 static bool is_base_var(SEXP sym, CompilerContext *cntxt);
 static SEXP R_bcVersion();
 static bool is_in_set(SEXP sym, SEXP set);
-static SEXP union_sets(SEXP a, SEXP b);
+static ExtraVars union_sets(ExtraVars a, ExtraVars b);
 SEXP constant_fold(SEXP e, CompilerContext* cntxt, Loc loc);
 
 // Inlining
@@ -1223,7 +1225,7 @@ SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt ) {
       int err = 0;
       
       // Evaluating the symbol in the top frame forces the promise safely
-      val = R_tryEval(fun_sym, cenv->top_frame->r_env, &err);
+      val = R_tryEval(fun_sym, cenv->r_env, &err);
       if (err) return R_NilValue;
     }
     
@@ -1333,16 +1335,17 @@ VarInfo find_cenv_var(SEXP var, CompilerEnv* cenv) {
 
   while (current != NULL) {
 
-    if ((current->extra_vars != R_NilValue) &&
-        (TYPEOF(current->extra_vars) == STRSXP)) {
-      int n = Rf_length(current->extra_vars);
+    if (current->extra_vars.count != 0) {
+      
+      int n = current->extra_vars.count;
+
       for (int i = 0; i < n; i++) {
 
-        const char* extra = CHAR(STRING_ELT(current->extra_vars, i));
+        const char* extra = current->extra_vars.vars[i];
       
         if (strcmp(var_name, extra) == 0) {
           info.defining_frame = current;
-          info.env = current->r_env; 
+          info.env = cenv->r_env; 
           info.found = true;
           return info;
         }
@@ -1350,16 +1353,18 @@ VarInfo find_cenv_var(SEXP var, CompilerEnv* cenv) {
       }
     }
 
-    SEXP val = Rf_findVarInFrame3(current->r_env, var, TRUE);
-    if (val != R_UnboundValue) {
-      info.defining_frame = current;
-      info.env = current->r_env;
-      info.value = val;
-      info.found = true;
-      return info;
+    if ( cenv->r_env != R_NilValue ) {
+      SEXP val = Rf_findVarInFrame3(cenv->r_env, var, TRUE);
+      if (val != R_UnboundValue) {
+        info.defining_frame = current;
+        info.env = cenv->r_env;
+        info.value = val;
+        info.found = true;
+        return info;
+      }
     }
 
-    last_env = current->r_env;
+    last_env = cenv->r_env;
     current = current->parent;
   }
 
@@ -1381,21 +1386,19 @@ VarInfo find_cenv_var(SEXP var, CompilerEnv* cenv) {
   return info;  // Not found
 }
 
-SEXP get_assigned_var( SEXP var ) {
+const char * get_assigned_var( SEXP var ) {
 
   SEXP v = CADR( var );
 
   if ( v == R_MissingArg ) {
     Rf_error("Bad assignment");
-    return R_NilValue; 
+    return NULL; 
   }
 
-   
-
   // Handle strings and symbols
-  if ( TYPEOF( v ) == SYMSXP ) return Rf_ScalarString( PRINTNAME(v) );
-  else if ( TYPEOF( v ) == STRSXP && Rf_length(v) > 0  ) return Rf_ScalarString( STRING_ELT(v, 0) );
-  else if ( TYPEOF( v ) == CHARSXP ) return Rf_ScalarString( v );
+  if ( TYPEOF( v ) == SYMSXP ) return CHAR( PRINTNAME(v) );
+  else if ( TYPEOF( v ) == STRSXP && Rf_length(v) > 0  ) return CHAR( STRING_ELT(v, 0) );
+  else if ( TYPEOF( v ) == CHARSXP ) return CHAR( v );
   else {
     // Handle complex assignments names(x) <- 1
     while ( TYPEOF( v ) == LANGSXP ) {
@@ -1406,7 +1409,7 @@ SEXP get_assigned_var( SEXP var ) {
 
     if ( TYPEOF( v ) != SYMSXP ) Rf_error("Bad assignment");
 
-    return Rf_ScalarString( PRINTNAME(v) ); 
+    return CHAR( PRINTNAME(v) ); 
   }
 
 };
@@ -1422,24 +1425,25 @@ static bool is_in_set(SEXP sym, SEXP set) {
   return false;
 }
 
-static SEXP union_sets(SEXP a, SEXP b) {
+static ExtraVars union_sets(ExtraVars a, ExtraVars b) {
 
-  if (a == R_NilValue || Rf_length(a) == 0) return b;
-  if (b == R_NilValue || Rf_length(b) == 0) return a;
+  if (a.count == 0) return b;
+  if (b.count == 0) return a;
 
-  int len_a = Rf_length(a);
-  int len_b = Rf_length(b);
+  int len_a = a.count;
+  int len_b = b.count;
   int max_len = len_a + len_b;
 
-  SEXP *buffer = (SEXP *) R_chk_calloc(max_len, sizeof(SEXP));
+                          // TODO outdated
+  const char ** buffer = (const char **) R_alloc(max_len, sizeof(const char*));
   int count = 0;
 
   for (int i = 0; i < len_a; i++) {
-    buffer[count++] = STRING_ELT(a, i);
+    buffer[count++] = a.vars[i];
   }
 
   for (int i = 0; i < len_b; i++) {
-    SEXP val_b = STRING_ELT(b, i);
+    const char * val_b = b.vars[i];
     bool found = false;
     
     for (int j = 0; j < len_a; j++) {
@@ -1454,20 +1458,20 @@ static SEXP union_sets(SEXP a, SEXP b) {
     }
   }
 
-  SEXP res = PROTECT(Rf_allocVector(STRSXP, count));
-  for (int i = 0; i < count; i++) {
-    SET_STRING_ELT(res, i, buffer[i]);
-  }
+  ExtraVars ret;
+  ret.count = count;
+  ret.vars = buffer;
 
-  R_chk_free(buffer);
-  UNPROTECT(1);
-  return res;
-}
+  return ret;
 
-SEXP find_locals_list( SEXP elist, SEXP known_locals ) {
+};
+
+ExtraVars find_locals_list( SEXP elist, ExtraVars known_locals ) {
 
   // Initialize empty list of locals
-  SEXP found = R_NilValue;
+  ExtraVars found;
+  found.count = 0;
+  found.vars = NULL;
 
   // Iterate over expressions in the list
   SEXP node = elist;
@@ -1477,17 +1481,15 @@ SEXP find_locals_list( SEXP elist, SEXP known_locals ) {
     SEXP expr = CAR( node );
 
     // Find locals in the expression
-    SEXP new_vars = find_locals( expr, known_locals );
-    PROTECT( new_vars );
+    ExtraVars new_vars = find_locals( expr, known_locals );
 
-    if ( new_vars != R_NilValue ) {
-      if (found == R_NilValue)
+    if ( new_vars.count != 0 ) {
+      if (found.count == 0)
           found = new_vars;
       else
         found = union_sets(found, new_vars);
     }
 
-    UNPROTECT(1); // new_vars
     node = CDR( node );
   }
   return found;
@@ -1497,17 +1499,21 @@ SEXP find_locals_list( SEXP elist, SEXP known_locals ) {
 TODO: refactor find_locals to avoid deep recursion on large expressions
       use a todo list like in the reference
 */
-SEXP find_locals( SEXP expr, SEXP known_locals ) {
+ExtraVars find_locals( SEXP expr, ExtraVars known_locals ) {
+
+  ExtraVars ret;
+  ret.count = 0;
+  ret.vars = NULL;
 
   // Base case: expression is not a function call
-  if ( TYPEOF( expr ) != LANGSXP ) return R_NilValue;
+  if ( TYPEOF( expr ) != LANGSXP ) return ret;
 
   // here we know expr is a LANGSXP
   SEXP fun = CAR( expr );
 
   // Lambda or anonymous function call
   if ( TYPEOF( fun ) != SYMSXP )
-    return find_locals_list( expr, known_locals ); // weird thingy (yes)
+    return find_locals_list( expr, known_locals );
 
   // Its a function call with a symbol as function name
   const char* fname = CHAR( PRINTNAME( fun ) );
@@ -1516,22 +1522,30 @@ SEXP find_locals( SEXP expr, SEXP known_locals ) {
   if ( strcmp( fname, "<-" ) == 0 || strcmp( fname, "=" ) == 0 ) {
     
     // Assignment LHS (the variable being assigned to)
-    SEXP var =  get_assigned_var( expr );
+    const char * var =  get_assigned_var( expr );
 
+    ret.count = 1;
+    ret.vars = (const char **) R_alloc(1, sizeof(const char *));
+    ret.vars[0] = var;
+    
     // Recurse into RHS
-    SEXP rhs_locals = find_locals( CADDR( expr ), known_locals );
+    ExtraVars rhs_locals = find_locals( CADDR( expr ), known_locals );
 
-    return union_sets( rhs_locals, var );
+    return union_sets( rhs_locals, ret );
 
   }
 
   // A for loop
   if ( strcmp( fname, "for" ) == 0 ) {
 
-    SEXP loop_var = Rf_ScalarString( PRINTNAME( CADR( expr ) ) );
-    SEXP seq_locals = find_locals( CADDR( expr ), known_locals );
-    SEXP body_locals = find_locals( CADDDR( expr ), known_locals );
-    
+    const char * loop_var_raw = CHAR( PRINTNAME( CADR( expr ) ) );
+    ExtraVars seq_locals = find_locals( CADDR( expr ), known_locals );
+    ExtraVars body_locals = find_locals( CADDDR( expr ), known_locals );
+
+    const char ** loop_var_arr = (const char **) R_alloc(1, sizeof(const char *));
+    loop_var_arr[0] = loop_var_raw;
+    ExtraVars loop_var = { loop_var_arr, 1 };
+
     return union_sets( union_sets( seq_locals, loop_var ), body_locals );
   
   }
@@ -1541,21 +1555,31 @@ SEXP find_locals( SEXP expr, SEXP known_locals ) {
        strcmp( fname, "quote" ) == 0 ||
        strcmp( fname, "expression" ) == 0 ) {
 
-      if (!is_in_set( fun, known_locals )) {
-        return R_NilValue;
+      const char * cmpname = CHAR( PRINTNAME( fun ) ); 
+      bool found = false;
+
+      for ( int i = 0; i < known_locals.count; i++ ) {
+
+        if ( strcmp( cmpname, known_locals.vars[i] ) == 0 ) {
+          found = true;
+          break;
+        }
+
       }
+
+      if ( ! found )
+        return ret;
     
   }
     
-  // General case: recurse into all arguments
   return find_locals_list( CDR( expr ), known_locals );
 
 };
 
-void add_cenv_vars( CompilerEnv * cenv, SEXP vars ) {
+void add_cenv_vars( CompilerEnv * cenv, ExtraVars vars ) {
 
   // Check if there is something to add
-  if (vars == R_NilValue) return;
+  if (vars.count == 0) return;
 
   #ifdef DEBUG
   if (TYPEOF(vars) == STRSXP && LENGTH(vars) > 0) {
@@ -1567,43 +1591,28 @@ void add_cenv_vars( CompilerEnv * cenv, SEXP vars ) {
   }
   #endif
 
-  SEXP current_vars = cenv->top_frame->extra_vars;
-  SEXP combined_vars = union_sets( current_vars, vars );
+  ExtraVars current_vars = cenv->top_frame->extra_vars;
+  ExtraVars combined_vars = union_sets( current_vars, vars );
   
-  // TODO  ?
   cenv->top_frame->extra_vars = combined_vars;
-
-  SET_VECTOR_ELT( cenv->top_frame->shadow_node, 1, combined_vars );
   
 };
 
 
-void add_cenv_frame( CompilerEnv * cenv, SEXP vars ) {
+void add_cenv_frame( CompilerEnv * cenv, ExtraVars vars ) {
 
   EnvFrame * new_frame = (EnvFrame *) R_alloc (1, sizeof( EnvFrame ));
-  
-  new_frame->r_env = Rf_allocSExp( ENVSXP );
-  SEXP shadow_node = Rf_allocVector( VECSXP, 2 );
-  SET_VECTOR_ELT( shadow_node, 0, new_frame->r_env );
-  SET_VECTOR_ELT( shadow_node, 1, R_NilValue ); // extra_vars placeholder
 
-  new_frame->shadow_node = shadow_node;
+  ExtraVars nil = {NULL,0};
 
-  SET_ENCLOS(new_frame->r_env, cenv->top_frame->r_env);
-  
   new_frame->type = FRAME_LOCAL; 
   new_frame->parent = cenv->top_frame;
-  new_frame->extra_vars = R_NilValue; // Initialize to avoid garbage
+  new_frame->extra_vars = nil; // Initialize to avoid garbage
 
   cenv->top_frame = new_frame;
 
-  // Update shadow stack
-  SEXP current_stack = VECTOR_ELT( cenv->shadow_stack, 0 );
-  SEXP new_stack = CONS( shadow_node, current_stack );
-
-  SET_VECTOR_ELT( cenv->shadow_stack, 0, new_stack );
-
   add_cenv_vars( cenv, vars );
+
 };
 
 // @manual 5.1
@@ -1611,62 +1620,71 @@ CompilerEnv * make_cenv( SEXP env ) {
 
   // Allocate the compilation environment entry point
   CompilerEnv *cenv = (CompilerEnv *) R_alloc (1, sizeof( CompilerEnv ));
+  cenv->r_env = env;
   
   // Allocate the topmost frame
   cenv->top_frame = (EnvFrame *) R_alloc (1, sizeof( EnvFrame ));
 
-  cenv->top_frame->parent = NULL;
-  cenv->top_frame->r_env = env;
-  cenv->top_frame->extra_vars = R_NilValue;
+  ExtraVars nil = {NULL,0};
 
-  // Initialize shadow stack for GC safety for r_env and extra_vars
-  cenv->shadow_stack = Rf_allocVector( VECSXP, 1 );
-  SET_VECTOR_ELT( cenv->shadow_stack, 0, R_NilValue ); 
+  cenv->top_frame->parent = NULL;
+  cenv->top_frame->extra_vars = nil;
 
   return cenv;
 
 }
 
+ExtraVars extract_names( SEXP forms ) {
+
+  ExtraVars empty = { NULL, 0 };
+
+  if ( forms == R_NilValue || length(forms) == 0 )
+    return empty;
+
+  ExtraVars vars = { (const char **) R_alloc( sizeof( const char * ), length( forms ) ), length( forms ) };
+
+  int count = 0;
+  SEQ_ALONG( iter, forms ) {
+    if ( TAG(iter) != R_NilValue ) {
+      vars.vars[count] = CHAR( PRINTNAME( TAG( iter ) ) );
+      count++;
+    }
+  }
+
+  vars.count = count;
+  return vars;
+
+}
 // @manual 5.2
 CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
 
   CompilerEnv *new_cenv = (CompilerEnv *) R_alloc (1, sizeof( CompilerEnv ));
-
-  new_cenv->shadow_stack = Rf_allocVector( VECSXP, 1 );
-  PROTECT( new_cenv->shadow_stack );
-  SET_VECTOR_ELT( new_cenv->shadow_stack, 0, R_NilValue ); 
-
   new_cenv->top_frame = cntxt->env->top_frame;
+  new_cenv->r_env = cntxt->env->r_env;
 
-  add_cenv_frame( new_cenv, getAttrib( forms, R_NamesSymbol ) );
+  add_cenv_frame( new_cenv, extract_names(forms) );
 
-  SEXP locals = find_locals_list( forms, R_NilValue );
-  PROTECT(locals);
+  ExtraVars nullv = {NULL, 0};
+  ExtraVars locals = find_locals_list( forms, nullv );
 
-  SEXP arg_names = getAttrib( forms, R_NamesSymbol );
-  
-  SEXP tmp = union_sets( locals, arg_names );
-  UNPROTECT(1); // locals
+
+  ExtraVars arg_names = extract_names(forms);
+  ExtraVars tmp = union_sets( locals, arg_names );
   locals = tmp;
-  PROTECT(locals);
 
   while ( true ) {
 
-    SEXP new_found = find_locals( body, locals );
-    SEXP combined = union_sets( locals, new_found );
+    ExtraVars new_found = find_locals( body, locals );
+    ExtraVars combined = union_sets( locals, new_found );
 
-    if ( Rf_length( combined ) == Rf_length( locals ) )
+    if ( combined.count == locals.count )
       break;
 
-    UNPROTECT(1); // locals
     locals = combined;
-    PROTECT(locals);
 
   }
 
   add_cenv_vars( new_cenv, locals );  
-
-  UNPROTECT(2); // locals, shadow_stack
   return new_cenv;
 }
 
@@ -2380,25 +2398,13 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
       DEBUG_PRINT(">> cmpfun: Compiling CLOSXP (Function)\n");
 
       CompilerEnv* cenv = make_cenv(CLOENV(f));
-
-      /* TODO / TOASK, RE: protecting variables returned from functions
-        is it okay to unprotect then return SEXP then protect outside,
-        or should the function end with an unbalanced stack, caller unprotects
-        it and reprotects the returned SEXP?
-      */
-      PROTECT(cenv->shadow_stack);
-
       CompilerContext* cntxt = make_toplevel_ctx(cenv);
-
       CompilerEnv* fenv = make_fun_env(FORMALS(f), BODY(f), cntxt);
-      PROTECT(fenv->shadow_stack);
-
       CompilerContext* ncntxt =
           make_function_ctx(cntxt, fenv, FORMALS(f), BODY(f));
 
       if (may_call_browser(BODY(f), ncntxt)) {
         DEBUG_PRINT("!! cmpfun: Function may call browser, skipping compilation\n");
-        UNPROTECT(2);  // cenv->shadow_stack, fenv->shadow_stack
         return f;
       }
 
@@ -2435,7 +2441,7 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
 
       if (isS4(f)) val = Rf_asS4(val, FALSE, 0);
 
-      UNPROTECT(3);  // b, cenv->shadow_stack, fenv->shadow_stack
+      UNPROTECT(1);  // b
       DEBUG_PRINT("<< cmpfun done, returning\n");
 
       return val;
@@ -3877,11 +3883,7 @@ bool cmp_assign(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   SEXP lhs = CADR(e);
   SEXP value = CADDR(e);
 
-  SEXP symbol = get_assigned_var(e /*, cntxt*/);
-
-  if (TYPEOF(symbol) != SYMSXP) {
-    symbol = install(CHAR(asChar(symbol)));
-  }
+  SEXP symbol = install( get_assigned_var(e /*, cntxt*/) );
 
   if (super_assign && !find_var(symbol, cntxt)) {
     //TODO notify_no_super_assign_var(symbol, cntxt, cb_savecurloc(cb));
