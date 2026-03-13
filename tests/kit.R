@@ -1,3 +1,5 @@
+OPTIMIZE <- 0
+
 compare_bytecode_strict <- function(bc1, bc2, path = "Root") {
   
   # 1. Unpack closures to get to the raw bytecode
@@ -142,7 +144,7 @@ benchmark_compilers <- function(prog, iters = 10, dump_bytecode = TRUE, torture 
   # 1. Benchmark compiler::cmpfun 
   for (i in 1:iters) {
     start_time <- Sys.time()
-    res_compiler <- compiler::cmpfun(prog, options=list(optimize=2)) 
+    res_compiler <- compiler::cmpfun(prog, options=list(optimize=OPTIMIZE)) 
     end_time <- Sys.time()
     times_compiler[i] <- as.numeric(difftime(end_time, start_time, units = "secs"))
   }
@@ -151,7 +153,7 @@ benchmark_compilers <- function(prog, iters = 10, dump_bytecode = TRUE, torture 
   for (i in 1:iters) {
     start_time <- Sys.time()
     gctorture(on = torture)
-    res_crbcc <- crbcc::cmpfun(prog)
+    res_crbcc <- crbcc::cmpfun(prog, options=list(optimize=OPTIMIZE))
     gctorture(on = FALSE)
     end_time <- Sys.time()
     times_crbcc[i] <- as.numeric(difftime(end_time, start_time, units = "secs"))
@@ -202,8 +204,7 @@ test_package <- function(package, torture=FALSE) {
     #cat(sprintf("Compiling %s...\n", func_id))
 
     tryCatch({
-      res <- benchmark_compilers(uncompiled_funs[[i]], 10, FALSE, torture)
-      
+      res <- benchmark_compilers(uncompiled_funs[[i]], 1, FALSE, torture)
 
       if (!isTRUE(res$bytecode_identical)) {
         cat(sprintf("\n========================================\n"))
