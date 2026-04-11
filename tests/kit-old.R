@@ -1,16 +1,3 @@
-packages <- c("bench", "cyclocomp")
-
-missing_packages <- packages[!(packages %in% rownames(installed.packages()))]
-
-if (length(missing_packages) > 0) {
-  install.packages(missing_packages)
-}
-
-library(bench)
-library(cyclocomp)
-
-OPTIMIZE = 2
-
 compare_bytecode_strict <- function(bc1, bc2, path = "Root") {
   
   # 1. Unpack closures to get to the raw bytecode
@@ -144,10 +131,52 @@ dump_all_bytecode <- function(bc, filename) {
   dump_recursive(bc, "Root")
 }
 
-test_package <- function(package, torture=FALSE) {
+benchmark_compilers <- function(prog, iters = 10, dump_bytecode = TRUE, torture = FALSE) {
 
   if (!requireNamespace("compiler", quietly = TRUE)) stop("Package 'compiler' is required.")
   if (!requireNamespace("crbcc", quietly = TRUE)) stop("Package 'crbcc' is required.")
+
+  times_compiler <- numeric(10)
+  times_crbcc <- numeric(10)
+  
+  # 1. Benchmark compiler::cmpfun 
+  for (i in 1:iters) {
+    start_time <- Sys.time()
+    res_compiler <- compiler::cmpfun(prog, options=list(optimize=2)) 
+    end_time <- Sys.time()
+    times_compiler[i] <- as.numeric(difftime(end_time, start_time, units = "secs"))
+  }
+
+  # 2. Benchmark crbcc::cmpfun
+  for (i in 1:iters) {
+    start_time <- Sys.time()
+    gctorture(on = torture)
+    res_crbcc <- crbcc::cmpfun(prog)
+    gctorture(on = FALSE)
+    end_time <- Sys.time()
+    times_crbcc[i] <- as.numeric(difftime(end_time, start_time, units = "secs"))
+  }
+
+  # 3. Dump recursively to files if requested
+  if (dump_bytecode) {
+    dump_all_bytecode(res_compiler, "bytecode_reference.txt")
+    dump_all_bytecode(res_crbcc, "bytecode_crbcc.txt")
+    
+    message("Recursive bytecode successfully dumped to 'bytecode_reference.txt' and 'bytecode_crbcc.txt'")
+  }
+
+  # 4. Strict Bytecode Comparison (using the strict function from earlier)
+  is_identical <- compare_bytecode_strict(res_compiler, res_crbcc)
+
+  return(list(
+    mean_time_compiler_sec = mean(times_compiler),
+    mean_time_crbcc_sec = mean(times_crbcc),
+    speedup = mean(times_compiler) / mean(times_crbcc),
+    bytecode_identical = is_identical
+  ))
+}
+
+test_package <- function(package, torture=FALSE) {
 
   ns <- getNamespace(package)
   symbols <- ls(ns, all.names=T)
@@ -164,64 +193,59 @@ test_package <- function(package, torture=FALSE) {
   })
 
   names(uncompiled_funs) <- func_names
-  
-  output_dir <- "test_results"
-  
-  if (!dir.exists(output_dir)) {
-    dir.create(output_dir, recursive = TRUE)
-  }
-  
-  csv_file <- file.path(output_dir, paste0(package, "_benchmark_results.csv"))
-  
-  headers <- data.frame(
-    function_name = character(),
-    lines_of_code = integer(),
-    cyclomatic_complexity = integer(),
-    median_gnu_r = numeric(),
-    median_crbcc = numeric()
-  )
+  compiled_ok <- 0
+  speedups <- numeric(0)
 
-  write.table(headers, file = csv_file, sep = ",", row.names = FALSE, col.names = TRUE)
-  
   for (i in seq_along(uncompiled_funs)) {
-    f_name <- func_names[i]
-    f_uncomp <- uncompiled_funs[[i]]
     
-    # 1. Code Metrics
-    loc <- length(deparse(body(f_uncomp)))
-    complexity <- tryCatch(cyclocomp::cyclocomp(f_uncomp), error = function(e) {print(e); NA})
-    
-    # 2. Benchmark
-    bm <- tryCatch({
-      bench::mark(
-        gnur = compiler::cmpfun(f_uncomp, options=list(optimize=OPTIMIZE)), 
-        crbcc = crbcc::cmpfun(f_uncomp, options=list(optimize=OPTIMIZE)),
-        iterations = 10,
-        check = FALSE,
-        memory = FALSE
-      )
-    }, error = function(e) NULL)
-    
-    # 3. Process and Save Results
-    if (!is.null(bm)) {
-      # Extract directly by row index. Row 1 is gnur, Row 2 is crbcc.
-      # bench::mark returns times in a custom class; as.numeric() converts them to seconds.
-      median_gnu_r <- as.numeric(bm$median[1])
-      median_crbcc <- as.numeric(bm$median[2])
+    func_id <- names(uncompiled_funs)[i]
+    #cat(sprintf("Compiling %s...\n", func_id))
+
+    tryCatch({
+      res <- benchmark_compilers(uncompiled_funs[[i]], 10, FALSE, torture)
       
-      res_row <- data.frame(
-        function_name = f_name,
-        lines_of_code = loc,
-        cyclomatic_complexity = complexity,
-        median_gnu_r = median_gnu_r,
-        median_crbcc = median_crbcc
-      )
+
+      if (!isTRUE(res$bytecode_identical)) {
+        cat(sprintf("\n========================================\n"))
+        cat(sprintf("[MISMATCH] Compilers are NOT identical!\n"))
+        cat(sprintf("Stopped at: %s\n", func_id))
+        cat(sprintf("========================================\n\n"))
+        
+        print(uncompiled_funs[[i]])
+        readLines(con = "stdin", n = 1)
+        system("clear")
+        
+      } else {
+        #cat("[OK]\n")
+        compiled_ok <- compiled_ok + 1
+        
+        if (!is.null(res$speedup)) {
+          speedups <- c(speedups, res$speedup)
+        }
+
+      }
+    
+    }, error = function(e) {
+      cat(sprintf("\n========================================\n"))
+      cat(sprintf("[FATAL] Compiler crashed!\n"))
+      cat(sprintf("Stopped at: %s\n", func_id))
+      cat(sprintf("Error: %s\n", e$message))
+      cat(sprintf("========================================\n\n"))
       
-      write.table(res_row, file = csv_file, sep = ",", row.names = FALSE, col.names = FALSE, append = TRUE)
-    }
+      print(uncompiled_funs[[i]])
+      
+      readLines(con = "stdin", n = 1)
+      
+      stop("Test suite halted due to fatal crash.")
+    })
+    
   }
+
+  avg_speedup <- if (length(speedups) > 0) mean(speedups) else NA
   
-  message("Benchmarking complete. Results saved to ", csv_file)
+  cat(sprintf("\n[OK] %d functions compiled identically\n", compiled_ok))
+  cat(sprintf("[PERF] Average compiler speedup: %.2fx\n", avg_speedup))
+
 }
 
 packages = c("base", "compiler", "tools", "stats", "utils")
@@ -231,4 +255,4 @@ for (i in packages) {
   test_package(i)
 }
 
-#test_package("compiler")
+#benchmark_compilers( benchmarked_fn )
