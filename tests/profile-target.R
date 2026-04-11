@@ -24,7 +24,7 @@ targets <- list(
   list(package = "stats", name = "nls")
 )
 
-ITERATIONS <- 500
+ITERATIONS <- 50
 OPTIMIZE_LEVEL <- 2
 
 cat("Starting C-level profiling run...\n")
