@@ -165,6 +165,17 @@ static int BCVersion;
 
 #pragma region Data Structures
 
+typedef struct {
+
+  int optimize_level;
+  bool suppress_all;
+  bool suppress_no_super_assign;
+  bool suppress_all_undef;
+  int num_suppress_vars;
+  const char **suppress_undefined_vars; 
+
+} CompilerOptions;
+
 typedef struct LoopInfo {
 
   bool null;                      // Is this a valid loop context?
@@ -180,12 +191,7 @@ typedef struct CompilerContext {
   bool tailcall;                  // Is this in tail position?
   bool need_return_jmp;           // Does return() need a longjmp?
 
-  short optimize_level;           // Integer (0-3) optimization level
-
-  // Error flags
-  int supress_all;
-  int supress_no_super_assign;
-  SEXP supress_undefined;         // Can be a boolean or char vector ()
+  CompilerOptions options;        
 
   // Other structures
   struct CompilerEnv *env;        // Current compilation environment
@@ -366,7 +372,7 @@ void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, 
 // Constructors for various compiler contexts etc
 CompilerEnv *make_cenv(SEXP env);
 CompilerEnv *make_fun_env(SEXP forms, SEXP body, CompilerContext *cntxt);
-CompilerContext *make_toplevel_ctx(CompilerEnv *cenv);
+CompilerContext *make_toplevel_ctx(CompilerEnv *cenv, SEXP options);
 CompilerContext *make_function_ctx(CompilerContext *cntxt, CompilerEnv *fenv, SEXP forms, SEXP body);
 CompilerContext *make_call_ctx(CompilerContext *cntxt, SEXP call);
 CompilerContext *make_non_tail_call_ctx(CompilerContext *cntxt);
@@ -390,7 +396,7 @@ void cmp_call_args(SEXP args, CodeBuffer *cb, CompilerContext *cntxt, bool nse);
 void cmp_tag(SEXP tag, CodeBuffer *cb);
 void cmp_const_arg(SEXP a, CodeBuffer *cb, CompilerContext *cntxt);
 
-SEXP cmpfun(SEXP f, void* __placeholder__);
+SEXP cmpfun(SEXP f, SEXP compiler_options);
 
 // Weird ahh functions
 bool find_var(SEXP var, CompilerContext *cntxt);
@@ -498,6 +504,10 @@ SEXP simple_internals(SEXP pos);
 #pragma endregion
 
 #pragma region Constants
+
+static const char *default_suppress_vars[] = {
+    ".Generic", ".Method", ".Random.seed", ".self"
+};
 
 static const char *const_names[] = {
   "pi", "T", "F", 
@@ -904,7 +914,7 @@ InlineInfo get_inline_info(char name[256], CompilerContext* cntxt, bool guard_ok
   ret.guard_needed = false;
   ret.in = NO;
 
-  if (cntxt->optimize_level == 0 || strcmp(name, "standardGeneric") == 0)
+  if (cntxt->options.optimize_level == 0 || strcmp(name, "standardGeneric") == 0)
     return ret;
 
   VarInfo info = find_cenv_var(install(name), cntxt->env);
@@ -956,8 +966,8 @@ InlineInfo get_inline_info(char name[256], CompilerContext* cntxt, bool guard_ok
     ret.env = from;
   } else {
     // It's a global hit. Check optimization levels 2 and 3.
-    if (cntxt->optimize_level >= 3 ||
-        (cntxt->optimize_level >= 2 && is_in_c_set(name, language_funs))) {
+    if (cntxt->options.optimize_level >= 3 ||
+        (cntxt->options.optimize_level >= 2 && is_in_c_set(name, language_funs))) {
       // Level 3, or Level 2 + core language function: No guard needed
       ret.can_inline = true;
       ret.guard_needed = false;
@@ -1664,21 +1674,101 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
   return new_cenv;
 }
 
+CompilerOptions extract_options(SEXP optlist) {
+  
+  CompilerOptions ret;
+
+  // Compiler defaults
+  ret.optimize_level = 2;
+  ret.suppress_all = true;
+  ret.suppress_no_super_assign = false;
+  ret.suppress_all_undef = false;
+  ret.num_suppress_vars = 4;
+  ret.suppress_undefined_vars = default_suppress_vars;
+
+  if (optlist == R_NilValue || TYPEOF(optlist) != VECSXP) {
+    return ret;
+  }
+
+  SEXP names = PROTECT( getAttrib(optlist, R_NamesSymbol) );
+  if (names == R_NilValue) {
+    return ret;
+  }
+
+  const char* opt_names[4] = {"optimize", "suppressAll",
+                              "suppressNoSuperAssignVar", "suppressUndefined"};
+
+  SEXP opt_vals[4] = {R_NilValue, R_NilValue, R_NilValue, R_NilValue};
+
+  int len = length(optlist);
+  for (int i = 0; i < len; i++) {
+    const char* key = CHAR(STRING_ELT(names, i));
+    for (int j = 0; j < 4; j++) {
+      if (strcmp(key, opt_names[j]) == 0) {
+        opt_vals[j] = VECTOR_ELT(optlist, i);
+        break;
+      }
+    }
+  }
+
+  // optimize
+  if (opt_vals[0] != R_NilValue && isNumeric(opt_vals[0]))
+    ret.optimize_level = asInteger(opt_vals[0]);
+
+  // suppressAll
+  if (opt_vals[1] != R_NilValue && isLogical(opt_vals[1]))
+    ret.suppress_all = asLogical(opt_vals[1]);
+
+  // suppressNoSuperAssignVar
+  if (opt_vals[2] != R_NilValue && isLogical(opt_vals[2]))
+    ret.suppress_no_super_assign = asLogical(opt_vals[2]);
+
+  // suppressUndefined
+  if (opt_vals[3] != R_NilValue) {
+    if (isLogical(opt_vals[3])) {
+      
+      int val = asLogical(opt_vals[3]);
+      
+      if (val == 1) {
+        ret.suppress_all_undef = true;
+        ret.num_suppress_vars = 0;
+        ret.suppress_undefined_vars = NULL;
+      } else if (val == 0) {
+        ret.suppress_all_undef = false;
+        ret.num_suppress_vars = 0;
+        ret.suppress_undefined_vars = NULL;
+      }
+    
+    } else if (isString(opt_vals[3])) {
+      ret.suppress_all_undef = false;
+      int n = length(opt_vals[3]);
+      ret.num_suppress_vars = n;
+
+      if (n > 0) {
+        ret.suppress_undefined_vars = (const char**) R_alloc (n, sizeof(const char*));
+        for (int k = 0; k < n; k++) {
+          ret.suppress_undefined_vars[k] = CHAR(STRING_ELT(opt_vals[3], k));
+        }
+      } else {
+        ret.suppress_undefined_vars = NULL;
+      }
+    }
+  }
+
+  UNPROTECT(1);
+  return ret;
+}
+
 // @manual 4.1
-CompilerContext * make_toplevel_ctx( CompilerEnv *cenv ) {
+CompilerContext * make_toplevel_ctx( CompilerEnv *cenv, SEXP options ) {
   
   CompilerContext *ctx = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
 
   ctx->toplevel = true;
   ctx->tailcall = true;
   ctx->need_return_jmp = false;
-  ctx->optimize_level = 2;
 
-  // TODO compiler options later to be passed as argument in this fn
-  ctx->supress_all = false;
-  ctx->supress_no_super_assign = false;
-  ctx->supress_undefined = R_NilValue;
-  
+  ctx->options = extract_options( options );  
   ctx->env = cenv;
   ctx->loop.null = true;
   ctx->call = R_NilValue;
@@ -1691,13 +1781,9 @@ CompilerContext * make_toplevel_ctx( CompilerEnv *cenv ) {
 CompilerContext * make_function_ctx( CompilerContext * cntxt, CompilerEnv * fenv, SEXP forms, SEXP body ) {
 
   CompilerEnv * env = fenv;
-  CompilerContext * ncntxt = make_toplevel_ctx( env );
+  CompilerContext * ncntxt = make_toplevel_ctx( env, R_NilValue );
+  ncntxt->options = cntxt->options;
 
-  ncntxt->optimize_level = cntxt->optimize_level;
-  ncntxt->supress_all = cntxt->supress_all;
-  ncntxt->supress_no_super_assign = cntxt->supress_no_super_assign;
-  ncntxt->supress_undefined = cntxt->supress_undefined;
-  
   return ncntxt;
 };
 
@@ -2366,7 +2452,7 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
 };
 
 // @manual 15.1 
-SEXP cmpfun(SEXP f, void* __placeholder__) {
+SEXP cmpfun(SEXP f, SEXP compiler_options) {
 
   SEXPTYPE type = TYPEOF( f );
 
@@ -2375,7 +2461,7 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
       DEBUG_PRINT(">> cmpfun: Compiling CLOSXP (Function)\n");
 
       CompilerEnv* cenv = make_cenv(CLOENV(f));
-      CompilerContext* cntxt = make_toplevel_ctx(cenv);
+      CompilerContext* cntxt = make_toplevel_ctx(cenv, compiler_options);
       CompilerEnv* fenv = make_fun_env(FORMALS(f), BODY(f), cntxt);
       CompilerContext* ncntxt =
           make_function_ctx(cntxt, fenv, FORMALS(f), BODY(f));
@@ -2436,6 +2522,8 @@ SEXP cmpfun(SEXP f, void* __placeholder__) {
 };
 
 // @manual 2.1
+// TODO what is gen for? Compiler reference says its used when inlining loops
+// but gen_code is not being called from anywhere in there? Maybe wrong?
 SEXP gen_code( SEXP e, CompilerContext * cntxt, SEXP gen, Loc loc ) {
 
   CodeBuffer * cb = make_code_buffer(e, loc);
@@ -2554,10 +2642,30 @@ SEXP is_compiled(SEXP fun) {
   return ScalarLogical(res);
 }
 
+SEXP compile( SEXP e, SEXP env, SEXP options, SEXP srcref ) {
+
+  Loc loc = { false, e, srcref };
+  CompilerEnv * cenv = make_cenv(env);
+  CompilerContext * cntxt = make_toplevel_ctx( cenv, options );
+  
+  ExtraVars empty = { NULL, 0 };
+  add_cenv_vars( cenv, find_locals( e, empty ) );
+
+  if ( may_call_browser( e, cntxt ) )
+    return e;
+  else if (srcref == R_NilValue)
+    return gen_code( e, cntxt, R_NilValue, loc );
+  else
+    return gen_code( e, cntxt, R_NilValue, loc );
+
+}
+
 // Registration of C functions
 static const R_CallMethodDef CallEntries[] = {
     {"cmpfun", (DL_FUNC) &cmpfun, 2},
     {"is_compiled", (DL_FUNC) &is_compiled, 1},
+    {"compile", (DL_FUNC) &compile, 4},
+    {"cmpfile", (DL_FUNC) NULL, 0},
     {NULL, NULL, 0}
 };
 
@@ -4354,7 +4462,7 @@ bool cmp_multi_colon(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 bool inline_with(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
-  cntxt->supress_undefined = R_TrueValue;
+  cntxt->options.suppress_all_undef = true;
   cmp_call_sym_fun( CAR(e), CDR(e), e, cb, cntxt );
   return true;
 
@@ -4362,7 +4470,7 @@ bool inline_with(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 bool inline_required(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
-  cntxt->supress_undefined = R_TrueValue;
+  cntxt->options.suppress_all_undef = true;
   cmp_call_sym_fun( CAR(e), CDR(e), e, cb, cntxt );
   return true;
 
