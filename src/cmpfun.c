@@ -6,8 +6,6 @@
 #include <Rinternals.h>
 #include <ctype.h>
 #include <stdarg.h>
-#include <stdint.h>
-#include <stddef.h>
 
 //#define DEBUG
 #define END_OPCODES -1
@@ -241,19 +239,6 @@ typedef struct LabelTable {
 
 } LabelTable;
 
-typedef struct HashTable {
-
-  int *table;
-  int records;
-  int capacity;
-
-} HashTable;
-
-typedef struct UnsafeItem {
-  int cp_index;
-  struct UnsafeItem *next;
-} UnsafeItem;
-
 typedef struct CodeBuffer {
 
   // Instruction stream
@@ -262,12 +247,10 @@ typedef struct CodeBuffer {
   int code_capacity;              // Current capacity of the code array
 
   // Constant pool
-  SEXP *constant_pool;             // R List object
+  SEXP constant_pool_handle;      // Handle to preserve the constant pool, single item list
+  SEXP constant_pool;             // R List object
   int const_count;                // Number of constants in the pool
   int const_capacity;             // Capacity of the constant pool
-  UnsafeItem * unsafe_items_head;
-
-  HashTable cpht;
 
   // Label management
   struct LabelTable label_table;
@@ -284,9 +267,6 @@ typedef struct CodeBuffer {
 
   struct SwitchPatch *switch_patches;    // Linked list head of switch statement patches
   struct SwitchPatch *patch_tail;         // O(1) append
-
-  int total_putconst_calls;
-  int hashtable_hits;
 
 } CodeBuffer;
 
@@ -382,9 +362,10 @@ void cb_putcodes_internal(CodeBuffer* cb, ...);
 
 // Code emission and constant pool management
 void cb_putcode(CodeBuffer *cb, int opcode);
+int cb_getcode(CodeBuffer *cb, int pos);
 int cb_putconst(CodeBuffer *cb, SEXP item);
+SEXP cb_getconst(CodeBuffer *cb, int idx);
 void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, int * char_labels, int char_count, int char_pos);
-void cb_registerunsafe(CodeBuffer *cb, int char_idx);
 
 // === CONTEXT AND ENVIRONMENT FUNCTIONS ===
 
@@ -590,82 +571,6 @@ static const char *safe_stats_internals[] = {
 #pragma endregion
 
 #pragma region o0
-
-#define HASH_COMBINE(h, val) ((h) ^ (val)) * 16777619
-#define MAX_HASH_ELEMENTS 64
-
-static inline int is_hashable(SEXP e) {
-  switch (TYPEOF(e)) {
-    case NILSXP:
-    case SYMSXP:
-    case STRSXP:
-    case INTSXP:
-    case LGLSXP:
-    case REALSXP:
-    case CPLXSXP:
-    case RAWSXP:
-      return 1;
-    default:
-      // Closures, environments, promises, externalptrs, ...
-      return 0; 
-  }
-}
-
-// FNV-1a hash for a block of raw bytes
-uint32_t hash_bytes(const void *ptr, size_t len) {
-    const uint8_t *bytes = (const uint8_t *)ptr;
-    uint32_t hash = 0x811c9dc5; // FNV offset basis
-    
-    for (size_t i = 0; i < len; i++) {
-        hash ^= bytes[i];
-        hash *= 16777619;       // FNV prime
-    }
-    
-    return hash;
-}
-
-static uint32_t sexp_hash(SEXP e) {
-  if (e == R_NilValue) return 0x811c9dc5;
-
-  uint32_t h = 0x811c9dc5;
-  R_xlen_t len;
-
-  switch (TYPEOF(e)) {
-    case SYMSXP:
-      return HASH_COMBINE(h, (uint32_t)(uintptr_t)e);
-
-    case STRSXP:
-      len = XLENGTH(e) > MAX_HASH_ELEMENTS ? MAX_HASH_ELEMENTS : XLENGTH(e);
-      for (R_xlen_t i = 0; i < len; i++) {
-        h = HASH_COMBINE(h, (uint32_t)(uintptr_t)STRING_ELT(e, i));
-      }
-      return HASH_COMBINE(h, XLENGTH(e)); 
-
-    case INTSXP:
-    case LGLSXP:
-      len = LENGTH(e) > MAX_HASH_ELEMENTS ? MAX_HASH_ELEMENTS : LENGTH(e);
-      h = HASH_COMBINE(h, hash_bytes(INTEGER(e), len * sizeof(int)));
-      return HASH_COMBINE(h, LENGTH(e));
-
-    case REALSXP:
-      len = LENGTH(e) > MAX_HASH_ELEMENTS ? MAX_HASH_ELEMENTS : LENGTH(e);
-      h = HASH_COMBINE(h, hash_bytes(REAL(e), len * sizeof(double)));
-      return HASH_COMBINE(h, LENGTH(e));
-
-    case CPLXSXP:
-      len = LENGTH(e) > MAX_HASH_ELEMENTS ? MAX_HASH_ELEMENTS : LENGTH(e);
-      h = HASH_COMBINE(h, hash_bytes(COMPLEX(e), len * sizeof(Rcomplex)));
-      return HASH_COMBINE(h, LENGTH(e));
-
-    case RAWSXP:
-      len = LENGTH(e) > MAX_HASH_ELEMENTS ? MAX_HASH_ELEMENTS : LENGTH(e);
-      h = HASH_COMBINE(h, hash_bytes(RAW(e), len * sizeof(Rbyte)));
-      return HASH_COMBINE(h, LENGTH(e));
-
-    default:
-      return HASH_COMBINE(h, TYPEOF(e));
-  }
-}
 
 static bool is_in_c_set(const char *str, const char *set[]) {
   if (str == NULL) return false;
@@ -1082,11 +987,6 @@ InlineInfo get_inline_info(char name[256], CompilerContext* cntxt, bool guard_ok
 
 bool try_inline(SEXP e, CodeBuffer* cb, CompilerContext* cntxt) {
 
-  // { fast track
-  if ( (cntxt->options.optimize_level != 0) && (e == R_BraceSymbol) ) {
-    return inline_left_brace(e, cb, cntxt);
-  }
-
   char name[256];
   strncpy(name, CHAR(PRINTNAME(CAR(e))), 255);
 
@@ -1217,7 +1117,6 @@ void cb_patch_switches(CodeBuffer *cb) {
         INTEGER(char_sexp)[i] = cb->label_table.table[patch->char_labels[i]];
       }
       int char_idx = PUTCONST(char_sexp);
-      cb_registerunsafe(cb, char_idx);
       cb->code[patch->char_code_offset] = char_idx; 
       UNPROTECT(1); 
     }
@@ -1227,7 +1126,6 @@ void cb_patch_switches(CodeBuffer *cb) {
       INTEGER(num_sexp)[i] = cb->label_table.table[patch->num_labels[i]];
     }
     int num_idx = PUTCONST(num_sexp);
-    cb_registerunsafe(cb, num_idx);
     cb->code[patch->num_code_offset] = num_idx;
     UNPROTECT(1);
 
@@ -1983,13 +1881,8 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
 
   CodeBuffer * cb = (CodeBuffer *) R_alloc (1, sizeof( CodeBuffer ) );
 
-  cb->total_putconst_calls = 0;
-  cb->hashtable_hits = 0;
-
   cb->expr_tracking_on = true;
   cb->srcref_tracking_on = true;
-
-  cb->unsafe_items_head= NULL;
 
   if ( loc.is_null ) {
 
@@ -2006,13 +1899,16 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
   if ( Rf_isNull( cb->current_srcref ) )
     cb->srcref_tracking_on = false;
 
+  cb->constant_pool_handle = Rf_allocVector(VECSXP, 1);
+  PROTECT( cb->constant_pool_handle );
+
   // Initialize code buffer itself
   cb->code_capacity = 128; // Initial capacity
   cb->code_count = 0;
   cb->code = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
   
   // Initialize constant pool
-  cb->constant_pool = NULL;
+  cb->constant_pool = R_NilValue; // Empty list
   cb->const_count = 0;
 
   cb->switch_patches = NULL;
@@ -2258,10 +2154,8 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
       int ci;
       if ( nse )
         ci = PUTCONST( a );
-      else {
+      else
         ci = PUTCONST( gen_code( a, pnctxt, R_NilValue, cb_savecurloc( cb ) ) );
-        cb_registerunsafe(cb, ci);
-      }
       
       PUTCODES( MAKEPROM_OP, ci );
     
@@ -2371,112 +2265,90 @@ void cb_putcode( CodeBuffer * cb, int opcode ) {
 
 };
 
+int cb_getcode( CodeBuffer * cb, int pos ) {
+
+  if ( pos < 0 || pos >= cb->code_count ) {
+    error("CodeBuffer: Invalid code position");
+  }
+
+  return cb->code[ pos ];
+
+};
+
+
 int cb_putconst( CodeBuffer * cb, SEXP item ) {
 
-  (cb->total_putconst_calls)++;
-
-  DEBUG_PRINT("++ putconst: Adding constant to pool\n");
+DEBUG_PRINT("++ putconst: Adding constant to pool\n");
 
   // Initialize constant pool if it doesn't exist
-  if ( cb->constant_pool == NULL ) {
-    
-    // Constant pool
+  if ( cb->constant_pool == R_NilValue ) {
     cb->const_capacity = 16;
     cb->const_count = 0;
-    cb->constant_pool = (SEXP*) R_alloc( sizeof(SEXP), cb->const_capacity ); 
 
-    // Constant pool adjacent hashtable
-    cb->cpht.capacity = 4096;
-    cb->cpht.records = 0;
-    cb->cpht.table = (int*) R_alloc(cb->cpht.capacity, sizeof(int));
-    
-    // Initialize hash table to -1
-    memset(cb->cpht.table, -1, cb->cpht.capacity * sizeof(int));
+    cb->constant_pool = PROTECT( Rf_allocVector( VECSXP, cb->const_capacity ) );
+
+    // Link the constant pool to its handle (protects agains GC)
+    SET_VECTOR_ELT( cb->constant_pool_handle, 0, cb->constant_pool );
 
     UNPROTECT(1);
   }
 
-  int hashable = is_hashable(item);
-  int bucket = -1;
-
-  // 1. Check if item already exists in pool
-  if (hashable) {
-    // FAST PATH: Hash table lookup
-    uint32_t hash = sexp_hash(item);
-    bucket = hash % cb->cpht.capacity;
+  // Check if item already exists in pool
+  for (int j = 0; j < cb->const_count; j++) {
+    SEXP compare = VECTOR_ELT( cb->constant_pool, j);
     
-    while ( cb->cpht.table[bucket] != -1 ) {
-      int pool_idx = cb->cpht.table[bucket];
-      SEXP compare = cb->constant_pool[pool_idx];
-
-      if (item == compare || R_compute_identical(item, compare, 16)) {
-        DEBUG_PRINT("++ putconst: Found in hash table at index %d\n", pool_idx);
-        (cb->hashtable_hits)++;
-        return pool_idx;
-      }
+    /* 16 - take closure environments into account  */
+    if (item == compare || R_compute_identical(item, compare, 16)) {
+      DEBUG_PRINT("++ putconst: Found existing constant in pool at index %d\n", j);
       
-      // Collision: probe next bucket
-      bucket = (bucket + 1) % cb->cpht.capacity;
-    }
-  } else {
-    // SLOW PATH: Linear lookup for complex/unhashable types
-    for (int j = 0; j < cb->const_count; j++) {
-      SEXP compare = cb->constant_pool[j];
-      
-      if (item == compare || R_compute_identical(item, compare, 16)) {
-        DEBUG_PRINT("++ putconst: Found via linear search at index %d\n", j);
-        return j;
-      }
+      // Found so return the existing index immediately,
+      // Do not increment const_count
+      return j;
     }
   }
 
-  // 2. Resize constant pool if full
+  // Resize constant pool if full
   if ( cb->const_count == cb->const_capacity ) {
+    
     int new_cap = cb->const_capacity * 2;
-    SEXP* new_pool = (SEXP*) R_alloc( sizeof(SEXP), new_cap ); 
-  
+    SEXP new_pool = Rf_allocVector( VECSXP, new_cap );
+    PROTECT( new_pool );
+    
+    // Copy existing items to the new pool
     for ( int i = 0; i < cb->const_count; i++ ) {
-      new_pool[i] = cb->constant_pool[i];
+      SET_VECTOR_ELT( new_pool, i, VECTOR_ELT( cb->constant_pool, i ) );
     }
 
+    // Swap the old pool from handler, old one will be garbage collected
+    SET_VECTOR_ELT( cb->constant_pool_handle, 0, new_pool );
+    
     cb->constant_pool = new_pool;
     cb->const_capacity = new_cap;
-    UNPROTECT(1);
+    UNPROTECT(1); // new_pool
   }
 
   // Add the new item to the pool
+  SET_VECTOR_ELT( cb->constant_pool, cb->const_count, item );
+  
+  // Capture the current index
   int new_idx = cb->const_count;
-  cb->constant_pool[new_idx] = item;
+  
+  // Increment the count
   cb->const_count++;
-
-  // 3. Insert into Hash Table ONLY if it was hashable
-  if (hashable) {
-    cb->cpht.table[bucket] = new_idx;
-    cb->cpht.records++;
-  }
-
+  
   return new_idx;
-}
 
-void cb_registerunsafe(CodeBuffer * cb, int cp_index) {
+};
 
-  UnsafeItem *tail = cb->unsafe_items_head;
-  while (tail != NULL && tail->next != NULL) {
-    tail = tail->next;
+SEXP cb_getconst( CodeBuffer * cb, int idx ) {
+
+  if ( idx < 0 || idx >= cb->const_count ) {
+    error("CodeBuffer: Invalid constant index");
   }
 
-  UnsafeItem *new = (UnsafeItem*) R_alloc(sizeof(UnsafeItem), 1);
-  
-  new->cp_index = cp_index;
-  new->next = NULL;
-  R_PreserveObject( cb->constant_pool[cp_index] );
+  return VECTOR_ELT( cb->constant_pool, idx );
 
-  if (tail != NULL)
-    tail->next = new;
-  else
-    cb->unsafe_items_head = new;
-  
-}
+};
 
 // @manual 15.1
 bool may_call_browser( SEXP expr, CompilerContext * cntxt ) {
@@ -2655,6 +2527,7 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
 SEXP gen_code( SEXP e, CompilerContext * cntxt, SEXP gen, Loc loc ) {
 
   CodeBuffer * cb = make_code_buffer(e, loc);
+  PROTECT( cb->constant_pool_handle ); // Protect constant pool handle
 
   if ( Rf_isNull( gen ) )
     cmp( e, cb, cntxt, false, false );
@@ -2674,9 +2547,6 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
   DEBUG_PRINT("++ code_buf_code: Generating final bytecode object\n");
   DEBUG_PRINT("   Code size: %d\n", cb->code_count);
   DEBUG_PRINT("   Constant pool size: %d\n", cb->const_count);
-
-  //Rprintf("%d cpinsertcalls \n", cb->total_putconst_calls);
-  //Rprintf("%d hits \n", cb->hashtable_hits);
 
   cb_patchlabels(cb);
 
@@ -2722,7 +2592,7 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
 
   SEXP const_pool;
 
-  if (cb->constant_pool == NULL || cb->const_count == 0) {
+  if (cb->constant_pool == R_NilValue || cb->const_count == 0) {
     // Create empty constant pool if no contants
     const_pool = PROTECT(Rf_allocVector(VECSXP, 0));
 
@@ -2731,7 +2601,7 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
     const_pool = PROTECT(Rf_allocVector(VECSXP, cb->const_count));
     
     for (int i = 0; i < cb->const_count; i++)
-      SET_VECTOR_ELT(const_pool, i, cb->constant_pool[i]);
+      SET_VECTOR_ELT(const_pool, i, VECTOR_ELT(cb->constant_pool, i));
     
   }
 
@@ -2743,12 +2613,6 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
   SEXP full_call = PROTECT(Rf_lang2(internal_sym, inner_call));
     
   SEXP final_bcode = Rf_eval(full_call, R_BaseEnv);
-
-  UnsafeItem* iter = cb->unsafe_items_head;
-  while(iter != NULL) {
-    R_ReleaseObject(cb->constant_pool[iter->cp_index]);
-    iter = iter->next;
-  }
 
   UNPROTECT(4); // code_vec, const_pool, inner_call, full_call
   return final_bcode;
@@ -3037,7 +2901,6 @@ bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   SET_VECTOR_ELT( const_list, 2, sref );
 
   int ci = PUTCONST( const_list );
-  cb_registerunsafe(cb, ci);
   PUTCODES( MAKECLOSURE_OP, ci );
 
   if ( cntxt->tailcall )
