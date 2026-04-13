@@ -3,26 +3,26 @@
 ## Package: `base`
 
 ### Core Metrics
-- **Geometric Average Speedup:** 65.5622x
+- **Geometric Average Speedup:** 61.6469x
 
 ### Variation
-- **Standard Deviation:** 23.4932
-- **Variance:** 551.9326
-- **Interquartile Range:** 30.2892
+- **Standard Deviation:** 20.2224
+- **Variance:** 408.9447
+- **Interquartile Range:** 27.0411
 
 ### Percentiles
 | 1% | 5% | 25% | 50% (Median) | 75% | 95% | 99% |
 |---|---|---|---|---|---|---|
-| 17.19 | 33.56 | 54.70 | 69.86 | 84.99 | 107.05 | 131.04 |
+| 17.02 | 31.47 | 52.49 | 65.58 | 79.53 | 98.51 | 108.12 |
 
 ### Absolute Throughput
-- **Total GNU R Time:** 7.6808 seconds
-- **Total crbcc Time:** 0.2660 seconds
-- **Absolute Speedup:** 28.8799x
+- **Total GNU R Time:** 7.1605 seconds
+- **Total crbcc Time:** 0.2634 seconds
+- **Absolute Speedup:** 27.1807x
 
 ### Correlations
-- **Lines of Code vs Speedup:** rho = -0.6843 (p = 1.256e-159)
-- **Cyclomatic Complexity vs Speedup:** rho = -0.6308 (p = 1.30314e-128)
+- **Lines of Code vs Speedup:** rho = -0.7226 (p = 2.75157e-186)
+- **Cyclomatic Complexity vs Speedup:** rho = -0.6632 (p = 1.13941e-146)
 
 ### Visualization
 ![Correlation Plot for base](base_correlation_plot.png)
@@ -32,26 +32,26 @@
 ## Package: `compiler`
 
 ### Core Metrics
-- **Geometric Average Speedup:** 64.9487x
+- **Geometric Average Speedup:** 60.6198x
 
 ### Variation
-- **Standard Deviation:** 20.8100
-- **Variance:** 433.0560
-- **Interquartile Range:** 27.5378
+- **Standard Deviation:** 14.9577
+- **Variance:** 223.7325
+- **Interquartile Range:** 19.0034
 
 ### Percentiles
 | 1% | 5% | 25% | 50% (Median) | 75% | 95% | 99% |
 |---|---|---|---|---|---|---|
-| 24.25 | 38.48 | 53.97 | 65.99 | 81.51 | 103.41 | 123.44 |
+| 32.70 | 40.61 | 51.65 | 61.51 | 70.66 | 88.51 | 99.14 |
 
 ### Absolute Throughput
-- **Total GNU R Time:** 0.8872 seconds
-- **Total crbcc Time:** 0.0165 seconds
-- **Absolute Speedup:** 53.6523x
+- **Total GNU R Time:** 0.8209 seconds
+- **Total crbcc Time:** 0.0162 seconds
+- **Absolute Speedup:** 50.6380x
 
 ### Correlations
-- **Lines of Code vs Speedup:** rho = -0.6294 (p = 1.06131e-16)
-- **Cyclomatic Complexity vs Speedup:** rho = -0.4353 (p = 8.54167e-08)
+- **Lines of Code vs Speedup:** rho = -0.7211 (p = 1.37753e-23)
+- **Cyclomatic Complexity vs Speedup:** rho = -0.4957 (p = 5.49656e-10)
 
 ### Visualization
 ![Correlation Plot for compiler](compiler_correlation_plot.png)
@@ -61,26 +61,26 @@
 ## Package: `stats`
 
 ### Core Metrics
-- **Geometric Average Speedup:** 58.1003x
+- **Geometric Average Speedup:** 55.6406x
 
 ### Variation
-- **Standard Deviation:** 29.0454
-- **Variance:** 843.6346
-- **Interquartile Range:** 44.1400
+- **Standard Deviation:** 26.9786
+- **Variance:** 727.8428
+- **Interquartile Range:** 39.5348
 
 ### Percentiles
 | 1% | 5% | 25% | 50% (Median) | 75% | 95% | 99% |
 |---|---|---|---|---|---|---|
-| 12.37 | 18.04 | 43.05 | 68.62 | 87.19 | 112.70 | 123.22 |
+| 12.72 | 18.27 | 41.72 | 64.50 | 81.25 | 105.89 | 116.47 |
 
 ### Absolute Throughput
-- **Total GNU R Time:** 12.8468 seconds
-- **Total crbcc Time:** 0.5681 seconds
-- **Absolute Speedup:** 22.6132x
+- **Total GNU R Time:** 12.7843 seconds
+- **Total crbcc Time:** 0.5673 seconds
+- **Absolute Speedup:** 22.5335x
 
 ### Correlations
-- **Lines of Code vs Speedup:** rho = -0.8295 (p = 5.06039e-236)
-- **Cyclomatic Complexity vs Speedup:** rho = -0.7878 (p = 1.16164e-196)
+- **Lines of Code vs Speedup:** rho = -0.8384 (p = 1.02282e-245)
+- **Cyclomatic Complexity vs Speedup:** rho = -0.7896 (p = 3.34451e-198)
 
 ### Visualization
 ![Correlation Plot for stats](stats_correlation_plot.png)
@@ -90,26 +90,26 @@
 ## Package: `tools`
 
 ### Core Metrics
-- **Geometric Average Speedup:** 54.6846x
+- **Geometric Average Speedup:** 51.5533x
 
 ### Variation
-- **Standard Deviation:** 22.2126
-- **Variance:** 493.3977
-- **Interquartile Range:** 29.5053
+- **Standard Deviation:** 19.4055
+- **Variance:** 376.5747
+- **Interquartile Range:** 23.6964
 
 ### Percentiles
 | 1% | 5% | 25% | 50% (Median) | 75% | 95% | 99% |
 |---|---|---|---|---|---|---|
-| 10.19 | 20.72 | 44.78 | 60.94 | 74.29 | 94.31 | 110.72 |
+| 11.72 | 21.31 | 43.52 | 57.71 | 67.22 | 84.22 | 103.70 |
 
 ### Absolute Throughput
-- **Total GNU R Time:** 16.6554 seconds
-- **Total crbcc Time:** 1.1559 seconds
-- **Absolute Speedup:** 14.4093x
+- **Total GNU R Time:** 16.2299 seconds
+- **Total crbcc Time:** 1.0942 seconds
+- **Absolute Speedup:** 14.8326x
 
 ### Correlations
-- **Lines of Code vs Speedup:** rho = -0.7610 (p = 9.69936e-149)
-- **Cyclomatic Complexity vs Speedup:** rho = -0.6457 (p = 1.95805e-93)
+- **Lines of Code vs Speedup:** rho = -0.7567 (p = 3.88358e-146)
+- **Cyclomatic Complexity vs Speedup:** rho = -0.6438 (p = 9.68625e-93)
 
 ### Visualization
 ![Correlation Plot for tools](tools_correlation_plot.png)
@@ -119,26 +119,26 @@
 ## Package: `utils`
 
 ### Core Metrics
-- **Geometric Average Speedup:** 53.5247x
+- **Geometric Average Speedup:** 52.2338x
 
 ### Variation
-- **Standard Deviation:** 24.8642
-- **Variance:** 618.2290
-- **Interquartile Range:** 30.4843
+- **Standard Deviation:** 24.1611
+- **Variance:** 583.7576
+- **Interquartile Range:** 28.9671
 
 ### Percentiles
 | 1% | 5% | 25% | 50% (Median) | 75% | 95% | 99% |
 |---|---|---|---|---|---|---|
-| 10.61 | 18.49 | 43.40 | 59.94 | 73.89 | 98.40 | 114.81 |
+| 10.21 | 19.30 | 42.23 | 58.24 | 71.20 | 96.48 | 115.79 |
 
 ### Absolute Throughput
-- **Total GNU R Time:** 7.1721 seconds
-- **Total crbcc Time:** 0.3824 seconds
-- **Absolute Speedup:** 18.7551x
+- **Total GNU R Time:** 7.0883 seconds
+- **Total crbcc Time:** 0.3778 seconds
+- **Absolute Speedup:** 18.7616x
 
 ### Correlations
-- **Lines of Code vs Speedup:** rho = -0.8333 (p = 3.43291e-135)
-- **Cyclomatic Complexity vs Speedup:** rho = -0.7361 (p = 1.11448e-89)
+- **Lines of Code vs Speedup:** rho = -0.8277 (p = 8.57625e-132)
+- **Cyclomatic Complexity vs Speedup:** rho = -0.7354 (p = 1.95192e-89)
 
 ### Visualization
 ![Correlation Plot for utils](utils_correlation_plot.png)
@@ -149,23 +149,23 @@
 
 | Package | Function | LOC | Cyclomatic Complexity | Speedup |
 |---|---|---|---|---|
-| tools | `.check_package_CRAN_incoming` | 803 | 340 | 3.8074x |
-| utils | `install.packages` | 662 | 322 | 5.3588x |
-| tools | `.install_packages` | 2084 | 691 | 6.0041x |
-| utils | `str.default` | 561 | 208 | 6.9490x |
-| stats | `plot.lm` | 347 | 88 | 7.9062x |
-| tools | `.check_packages` | 6285 | 1944 | 7.9685x |
-| base | `[<-.data.frame` | 283 | 174 | 8.0097x |
-| tools | `.check_packages_used` | 303 | 104 | 8.3548x |
-| stats | `predict.lm` | 226 | 105 | 8.4843x |
-| tools | `httpd` | 524 | 165 | 8.9673x |
-| tools | `.shlib_internal` | 376 | 138 | 9.0207x |
-| stats | `arima` | 350 | 128 | 9.1260x |
-| utils | `hsearch_db` | 244 | 94 | 9.3743x |
-| utils | `read.DIF` | 248 | 111 | 9.4429x |
-| stats | `arima0` | 225 | 95 | 9.4498x |
-| tools | `.check_package_depends` | 216 | 80 | 9.4521x |
-| base | `loadNamespace` | 520 | 158 | 9.4816x |
-| utils | `read.table` | 208 | 79 | 9.8647x |
-| tools | `codoc` | 309 | 60 | 9.8951x |
-| stats | `nls` | 168 | 41 | 10.0460x |
+| tools | `.check_package_CRAN_incoming` | 803 | 340 | 3.7677x |
+| utils | `install.packages` | 662 | 322 | 5.4683x |
+| tools | `.install_packages` | 2084 | 691 | 6.2496x |
+| utils | `str.default` | 561 | 208 | 6.6426x |
+| stats | `plot.lm` | 347 | 88 | 7.7964x |
+| base | `[<-.data.frame` | 283 | 174 | 8.3822x |
+| stats | `predict.lm` | 226 | 105 | 8.7475x |
+| tools | `.check_packages` | 6285 | 1944 | 9.0104x |
+| tools | `.shlib_internal` | 376 | 138 | 9.0176x |
+| utils | `read.DIF` | 248 | 111 | 9.1052x |
+| tools | `httpd` | 524 | 165 | 9.1203x |
+| stats | `arima` | 350 | 128 | 9.1465x |
+| stats | `arima0` | 225 | 95 | 9.1782x |
+| base | `loadNamespace` | 520 | 158 | 9.2033x |
+| tools | `.check_package_depends` | 216 | 80 | 9.2346x |
+| utils | `hsearch_db` | 244 | 94 | 9.2401x |
+| utils | `read.table` | 208 | 79 | 9.5457x |
+| tools | `codoc` | 309 | 60 | 9.6597x |
+| utils | `RweaveLatexRuncode` | 303 | 100 | 10.1594x |
+| stats | `nls` | 168 | 41 | 10.3011x |

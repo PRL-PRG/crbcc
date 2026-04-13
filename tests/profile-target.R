@@ -1,7 +1,12 @@
-if (!requireNamespace("crbcc", quietly = TRUE)) stop("Package 'crbcc' is required.")
+######################
+# PROFILING SCRIPT
+# (No comparing or measuring, run with external profiler)
+######################
+ITERATIONS <- 50
+OPTIMIZE_LEVEL <- 2
 
-# The Top 20 Global Worst Performers
-targets <- list(
+# Currently The Top 20 Global Worst Performers
+TARGETS <- list(
   list(package = "tools", name = ".check_package_CRAN_incoming"),
   list(package = "utils", name = "install.packages"),
   list(package = "tools", name = ".install_packages"),
@@ -23,13 +28,13 @@ targets <- list(
   list(package = "tools", name = "codoc"),
   list(package = "stats", name = "nls")
 )
+######################
 
-ITERATIONS <- 50
-OPTIMIZE_LEVEL <- 2
+if (!requireNamespace("crbcc", quietly = TRUE)) stop("Package 'crbcc' is required.")
 
 cat("Starting C-level profiling run...\n")
 
-for (t in targets) {
+for (t in TARGETS) {
   pkg <- t$package
   fn_name <- t$name
   

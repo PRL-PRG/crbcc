@@ -1,3 +1,23 @@
+###########################
+# CORRECTNESS TESTING
+# All paths relative to root, comparing crbcc
+# bytecode to GNU-R
+###########################
+PACKAGES = c("base", "compiler", "tools", "stats", "utils")
+
+# Print result reference and crbcc outputs
+# Outputs latest compiled without errors,
+# on mismatch look at diff
+DUMP_BC <- FALSE
+DUMP_BC_PATH <- "tests/bc"
+
+# Old performance benchmarks, use ./tests/perf.R
+# to measure performance
+BENCHMARK <- FALSE
+B_ITERS <- 10
+###########################
+
+
 compare_bytecode_strict <- function(bc1, bc2, path = "Root") {
   
   # 1. Unpack closures to get to the raw bytecode
@@ -159,8 +179,8 @@ benchmark_compilers <- function(prog, iters = 10, dump_bytecode = TRUE, torture 
 
   # 3. Dump recursively to files if requested
   if (dump_bytecode) {
-    dump_all_bytecode(res_compiler, "bytecode_reference.txt")
-    dump_all_bytecode(res_crbcc, "bytecode_crbcc.txt")
+    dump_all_bytecode(res_compiler, paste0(DUMP_BC_PATH, "/reference.txt"))
+    dump_all_bytecode(res_crbcc, paste0(DUMP_BC_PATH, "/crbcc.txt"))
     
     message("Recursive bytecode successfully dumped to 'bytecode_reference.txt' and 'bytecode_crbcc.txt'")
   }
@@ -201,8 +221,13 @@ test_package <- function(package, torture=FALSE) {
     func_id <- names(uncompiled_funs)[i]
     #cat(sprintf("Compiling %s...\n", func_id))
 
+    niters <- 1
+
+    if (BENCHMARK)
+     niters <- B_ITERS 
+
     tryCatch({
-      res <- benchmark_compilers(uncompiled_funs[[i]], 10, FALSE, torture)
+      res <- benchmark_compilers(uncompiled_funs[[i]], niters, DUMP_BC, torture)
       
 
       if (!isTRUE(res$bytecode_identical)) {
@@ -244,15 +269,13 @@ test_package <- function(package, torture=FALSE) {
   avg_speedup <- if (length(speedups) > 0) mean(speedups) else NA
   
   cat(sprintf("\n[OK] %d functions compiled identically\n", compiled_ok))
-  cat(sprintf("[PERF] Average compiler speedup: %.2fx\n", avg_speedup))
+
+  if (BENCHMARK)
+    cat(sprintf("[PERF] Average compiler speedup: %.2fx\n", avg_speedup))
 
 }
 
-packages = c("base", "compiler", "tools", "stats", "utils")
-
-for (i in packages) {
+for (i in PACKAGES) {
   cat(sprintf("\n[START] Compiling package: %s ", i))
   test_package(i)
 }
-
-#benchmark_compilers( benchmarked_fn )
