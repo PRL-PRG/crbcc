@@ -1,0 +1,22 @@
+{
+  "name": "R Package Dev",
+  "build": { 
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "capAdd": [
+    "SYS_ADMIN"
+  ],
+  "securityOpt": [
+    "seccomp=unconfined"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools", 
+        "ikuyadeu.r"
+      ]
+    }
+  },
+  "remoteUser": "root"
+}
