@@ -1,7 +1,0 @@
-services:
-
-  dev:
-    build: .
-    volumes:
-      - .:/project
-    command: R
