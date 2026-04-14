@@ -8,7 +8,7 @@
 #include <stdarg.h>
 
 //#define DEBUG
-#define OPTIMIZE_NONCOMPATIBLE true
+#define OPTIMIZE_INCOMPATIBLE true
 #define END_OPCODES -1
 
 extern SEXP R_TrueValue;
@@ -2297,9 +2297,9 @@ DEBUG_PRINT("++ putconst: Adding constant to pool\n");
   // Check if item already exists in pool
   
   // Exclude this check for language objects for testing purposes.
-  if (!OPTIMIZE_NONCOMPATIBLE || !(TYPEOF(item) == LANGSXP)) {
+  if (!OPTIMIZE_INCOMPATIBLE || !(TYPEOF(item) == LANGSXP)) {
   
-    for (int j = 0; j < cb->const_count; j++) {
+    for (int j = cb->const_count - 1; j >= 0; j--) {
       SEXP compare = VECTOR_ELT( cb->constant_pool, j);
       
       /* 16 - take closure environments into account  */
@@ -2320,7 +2320,7 @@ DEBUG_PRINT("++ putconst: Adding constant to pool\n");
     // Also, run the check backwards because when source tracking via cb_putcode
     // occurs from generating multiple instructions, the actual match is at the
     // last item in the vector
-    for (int j = cb->const_count; j >= 0; j--) {
+    for (int j = cb->const_count - 1; j >= 0; j--) {
       SEXP compare = VECTOR_ELT( cb->constant_pool, j );
 
       if ( item == compare )
