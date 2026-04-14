@@ -8,7 +8,7 @@ PACKAGES = c("base", "compiler", "tools", "stats", "utils")
 # Print result reference and crbcc outputs
 # Outputs latest compiled without errors,
 # on mismatch look at diff
-DUMP_BC <- FALSE
+DUMP_BC <- TRUE
 DUMP_BC_PATH <- "tests/bc"
 
 # Old performance benchmarks, use ./tests/perf.R
@@ -102,7 +102,9 @@ compare_bytecode_strict <- function(bc1, bc2, path = "Root") {
 }
 
 dump_all_bytecode <- function(bc, filename) {
+  
   # Open a file connection for writing
+  dir.create(dirname(filename), recursive = TRUE, showWarnings = FALSE)
   fc <- file(filename, open = "wt")
   
   # Ensure the file connection is closed when the function exits
