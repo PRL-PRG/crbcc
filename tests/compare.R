@@ -3,7 +3,7 @@
 # All paths relative to root, comparing crbcc
 # bytecode to GNU-R
 ###########################
-PACKAGES = c("base", "compiler", "tools", "stats", "utils")
+PACKAGES = c("compiler", "base", "tools", "stats", "utils")
 
 # Print result reference and crbcc outputs
 # Outputs latest compiled without errors,
@@ -47,7 +47,7 @@ compare_bytecode_strict <- function(bc1, bc2, path = "Root") {
   
   if (!identical(d1[[2]], d2[[2]])) {
     message(sprintf("[%s] Mismatch in Instruction Vector", path))
-    # Optional: Find the exact instruction index
+    # Find the exact instruction index
     for (idx in seq_along(d1[[2]])) {
       if (!identical(d1[[2]][[idx]], d2[[2]][[idx]])) {
         message(sprintf("     -> First opcode/operand difference at instruction index %d", idx))
@@ -184,7 +184,6 @@ benchmark_compilers <- function(prog, iters = 10, dump_bytecode = TRUE, torture 
     dump_all_bytecode(res_compiler, paste0(DUMP_BC_PATH, "/reference.txt"))
     dump_all_bytecode(res_crbcc, paste0(DUMP_BC_PATH, "/crbcc.txt"))
     
-    message("Recursive bytecode successfully dumped to 'bytecode_reference.txt' and 'bytecode_crbcc.txt'")
   }
 
   # 4. Strict Bytecode Comparison (using the strict function from earlier)

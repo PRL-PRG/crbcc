@@ -8,7 +8,7 @@
 #include <stdarg.h>
 
 //#define DEBUG
-#define OPTIMIZE_INCOMPATIBLE true
+#define OPTIMIZE_INCOMPATIBLE false
 #define END_OPCODES -1
 
 extern SEXP R_TrueValue;
@@ -30,9 +30,10 @@ static int BCVersion;
     int iter = 0; \
     for ( SEXP iter_name = along_var; iter_name != R_NilValue; iter_name = CDR(iter_name), iter++ )
 
-#define PUTCODES(...) cb_putcodes_internal(cb, __VA_ARGS__, END_OPCODES)
-#define PUTCONST(const) cb_putconst(cb, const)
-#define PUTCODE(code) cb_putcode(cb, code)
+#define PUTCONST(const) cb_putconst(cb, const, true)
+#define PUTCONST_NODEDUP(const) cb_putconst(cb, const, false)
+#define PUTCODES(...) cb_putcode(cb, __VA_ARGS__, END_OPCODES)
+#define PUTCODE(code) cb_putcode(cb, code, END_OPCODES)
 
 #pragma endregion
 
@@ -359,12 +360,11 @@ void cb_putlabel(CodeBuffer *cb, int label_id);
 void cb_patchlabels(CodeBuffer *cb);
 void ensure_label_capacity(LabelTable *lt, int needed_index);
 void cb_putcodelabel(CodeBuffer * cb, int label_id);
-void cb_putcodes_internal(CodeBuffer* cb, ...);
 
 // Code emission and constant pool management
-void cb_putcode(CodeBuffer *cb, int opcode);
+void cb_putcode(CodeBuffer *cb, ...);
 int cb_getcode(CodeBuffer *cb, int pos);
-int cb_putconst(CodeBuffer *cb, SEXP item);
+int cb_putconst(CodeBuffer *cb, SEXP item, bool check_dedup);
 SEXP cb_getconst(CodeBuffer *cb, int idx);
 void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, int * char_labels, int char_count, int char_pos);
 
@@ -1094,7 +1094,7 @@ void cb_putlabel(CodeBuffer * cb, int label_id) {
 
 // Set up the jump source
 void cb_putcodelabel(CodeBuffer * cb, int label_id) {
-  cb_putcode(cb, -(label_id + 1));
+  PUTCODE(-(label_id + 1));
 }
 
 int cb_makelabel(CodeBuffer * cb) {
@@ -1927,7 +1927,7 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
   cb->expr_buf = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
   cb->srcref_buf = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
 
-  cb_putconst(cb, preseed);
+  PUTCONST(preseed);
 
   UNPROTECT(1); // constant_pool_handle
   return cb;
@@ -1946,7 +1946,7 @@ void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
   else if ( IDENTICAL( val, R_FalseValue ) )
     PUTCODE( LDFALSE_OP );
   else {
-    int ci = cb_putconst( cb, val ); 
+    int ci = PUTCONST( val ); 
     PUTCODES( LDCONST_OP, ci );
   }
 
@@ -1971,7 +1971,7 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_o
       // TODO notify_wrong_dots_use()
     }
     
-    int ci = cb_putconst( cb, sym );
+    int ci = PUTCONST( sym );
 
     if ( missing_ok ) {
       PUTCODE( DDVAL_MISSOK_OP );
@@ -2206,10 +2206,12 @@ void cmp_const_arg( SEXP a, CodeBuffer * cb, CompilerContext * cntxt ) {
   
 };
 
-void cb_putcodes_internal(CodeBuffer* cb, ...) {
+void cb_putcode( CodeBuffer * cb, ... ) {
 
   va_list args;
   va_start(args, cb);
+
+  int srcrefpatchstart = cb->code_count;
 
   while (1) {
     int opcode = va_arg(args, int);
@@ -2218,52 +2220,57 @@ void cb_putcodes_internal(CodeBuffer* cb, ...) {
     if (opcode == END_OPCODES)
       break;
 
-    cb_putcode(cb, opcode);
+    // Resize if needed
+    if ( cb->code_count >= cb->code_capacity ) {
+    
+      // Resize code array
+      cb->code_capacity *= 2;
+
+      // realloc logic !! TOSTYLE duplicate code
+      int *new_code = (int *) R_alloc(cb->code_capacity, sizeof(int));
+      memcpy(new_code, cb->code, (cb->code_capacity / 2) * sizeof(int));
+      cb->code = new_code;
+    
+      // Update the source tracking buffers
+      int *new_expr_buf = (int *) R_alloc(cb->code_capacity, sizeof(int));
+      memcpy(new_expr_buf, cb->expr_buf, (cb->code_capacity / 2) * sizeof(int));
+      cb->expr_buf = new_expr_buf;
+
+      int *new_srcref_buf = (int *) R_alloc(cb->code_capacity, sizeof(int));
+      memcpy(new_srcref_buf, cb->srcref_buf, (cb->code_capacity / 2) * sizeof(int));
+      cb->srcref_buf = new_srcref_buf;
+
+    }
+
+    cb->code[ cb->code_count ] = opcode;
+    cb->code_count += 1;
+
   }
 
   va_end(args);
 
-}
+  int srcrefpatchend = cb->code_count;
 
-void cb_putcode( CodeBuffer * cb, int opcode ) {
-  DEBUG_PRINT("++ putcode: Emitting Opcode %d\n", opcode);
-
-  if ( cb->code_count >= cb->code_capacity ) {
-  
-    // Resize code array
-    cb->code_capacity *= 2;
-
-    // realloc logic !! TOSTYLE duplicate code
-    int *new_code = (int *) R_alloc(cb->code_capacity, sizeof(int));
-    memcpy(new_code, cb->code, (cb->code_capacity / 2) * sizeof(int));
-    cb->code = new_code;
-  
-    // Update the source tracking buffers
-    int *new_expr_buf = (int *) R_alloc(cb->code_capacity, sizeof(int));
-    memcpy(new_expr_buf, cb->expr_buf, (cb->code_capacity / 2) * sizeof(int));
-    cb->expr_buf = new_expr_buf;
-
-    int *new_srcref_buf = (int *) R_alloc(cb->code_capacity, sizeof(int));
-    memcpy(new_srcref_buf, cb->srcref_buf, (cb->code_capacity / 2) * sizeof(int));
-    cb->srcref_buf = new_srcref_buf;
-
-  }
-
-  cb->code[ cb->code_count ] = opcode;
-  
   // handle source tracking
-  int expression_idx = cb_putconst( cb, cb->current_expr );
-  cb->expr_buf[ cb->code_count ] = expression_idx;
+  int expression_idx = cb->expr_tracking_on ? PUTCONST_NODEDUP( cb->current_expr ) : 0;
+  int srcref_idx = cb->srcref_tracking_on ? PUTCONST_NODEDUP( cb->current_srcref ) : 0;
+  
+  for (int i = srcrefpatchstart; i < srcrefpatchend; i++) {
 
-  if (  cb->current_srcref != R_NilValue ) {
-    int srcref_idx = cb_putconst( cb, cb->current_srcref );
-    cb->srcref_buf[ cb->code_count ] = srcref_idx;
-  } else {
-    cb->srcref_buf[ cb->code_count ] = -1; // No srcref
+    if ( cb->expr_tracking_on ) {
+      cb->expr_buf[ i ] = expression_idx;
+    }
+
+    if ( cb->srcref_tracking_on ) {
+      if ( cb->current_srcref != R_NilValue ) {
+        cb->srcref_buf[ i ] = srcref_idx;
+      } else {
+        cb->srcref_buf[ i ] = -1; // No srcref
+      }
+    }
+
   }
-
-  cb->code_count += 1;
-
+  
 };
 
 int cb_getcode( CodeBuffer * cb, int pos ) {
@@ -2277,7 +2284,7 @@ int cb_getcode( CodeBuffer * cb, int pos ) {
 };
 
 
-int cb_putconst( CodeBuffer * cb, SEXP item ) {
+int cb_putconst( CodeBuffer * cb, SEXP item, bool check_dedup ) {
 
 DEBUG_PRINT("++ putconst: Adding constant to pool\n");
 
@@ -2295,15 +2302,22 @@ DEBUG_PRINT("++ putconst: Adding constant to pool\n");
   }
 
   // Check if item already exists in pool
-  
-  // Exclude this check for language objects for testing purposes.
-  if (!OPTIMIZE_INCOMPATIBLE || !(TYPEOF(item) == LANGSXP)) {
-  
+  for (int j = 0; j < cb->const_count; j++) {
+    SEXP compare = VECTOR_ELT( cb->constant_pool, j);
+    
+    if (item == compare)
+      return j;
+
+  }
+
+  // Deep check only for check_dedup = TRUE
+  if (!OPTIMIZE_INCOMPATIBLE || check_dedup) {
+
     for (int j = cb->const_count - 1; j >= 0; j--) {
       SEXP compare = VECTOR_ELT( cb->constant_pool, j);
       
       /* 16 - take closure environments into account  */
-      if (item == compare || R_compute_identical(item, compare, 16)) {
+      if (R_compute_identical(item, compare, 16)) {
         DEBUG_PRINT("++ putconst: Found existing constant in pool at index %d\n", j);
         
         // Found so return the existing index immediately,
@@ -2312,20 +2326,6 @@ DEBUG_PRINT("++ putconst: Adding constant to pool\n");
       }
     }
 
-  } else {
-
-    // CRBCC CUSTOM CHANGE - BREAKS BYTE-FOR-BYTE COMPATIBILITY
-    // For language objects run pointer equality only, as they are very expensive
-    // to evaluate via R_compute_identical with a very high miss rate anyway.
-    // Also, run the check backwards because when source tracking via cb_putcode
-    // occurs from generating multiple instructions, the actual match is at the
-    // last item in the vector
-    for (int j = cb->const_count - 1; j >= 0; j--) {
-      SEXP compare = VECTOR_ELT( cb->constant_pool, j );
-
-      if ( item == compare )
-        return j;
-    }
   }
 
   // Resize constant pool if full
@@ -3702,7 +3702,7 @@ void cmp_getter_call(SEXP place, SEXP origplace, CodeBuffer *cb, CompilerContext
       
       cmp_call_args(CDDR(place), cb, ncntxt, false);
       
-      int cci = cb_putconst(cb, place);
+      int cci = PUTCONST( place);
       PUTCODES( GETTER_CALL_OP, cci, SWAP_OP );
 
     }
@@ -3713,7 +3713,7 @@ void cmp_getter_call(SEXP place, SEXP origplace, CodeBuffer *cb, CompilerContext
     PUTCODES( CHECKFUN_OP, PUSHNULLARG_OP );
     cmp_call_args(CDDR(place), cb, ncntxt, false);
 
-    int cci = cb_putconst(cb, place);
+    int cci = PUTCONST( place);
     PUTCODES( GETTER_CALL_OP, cci, SWAP_OP );
 
   }
@@ -3869,7 +3869,7 @@ bool cmp_complex_assign(SEXP symbol, SEXP lhs, SEXP value, bool superAssign, Cod
   }
 
   if (!cntxt->toplevel)
-    cb_putcode(cb, INCLNKSTK_OP);
+    PUTCODE(INCLNKSTK_OP);
 
   // Compile the value to be assigned
   CompilerContext * ncntxt = make_non_tail_call_ctx(cntxt);
