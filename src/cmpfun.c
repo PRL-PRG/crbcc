@@ -401,10 +401,10 @@ SEXP cmpfun(SEXP f, SEXP compiler_options);
 
 // Weird ahh functions
 bool find_var(SEXP var, CompilerContext *cntxt);
-ExtraVars find_locals(SEXP expr, ExtraVars known_locals);
-ExtraVars find_locals_list(SEXP elist, ExtraVars known_locals);
+ExtraVars find_locals(SEXP expr, ExtraVars known_locals, CompilerContext *cntxt);
+ExtraVars find_locals_list(SEXP elist, ExtraVars known_locals, CompilerContext *cntxt);
 SEXP gen_code(SEXP e, CompilerContext *cntxt, SEXP gen, Loc loc);
-const char * get_assigned_var( SEXP var );
+const char * get_assigned_var( SEXP var, CompilerContext *cntxt );
 bool may_call_browser(SEXP expr, CompilerContext *cntxt);
 bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt);
 SEXP is_compiled(SEXP fun);
@@ -1623,13 +1623,13 @@ VarInfo find_cenv_var(SEXP var, CompilerEnv* cenv) {
 
   return info;  // Not found
 }
-const char * get_assigned_var( SEXP var ) {
+const char * get_assigned_var( SEXP var, CompilerContext *cntxt ) {
 
   SEXP v = CADR( var );
 
   if ( v == R_MissingArg ) {
     Loc nloc = {true, R_NilValue, R_NilValue};
-    cntxt_stop("bad assignment", NULL, nloc);
+    cntxt_stop("bad assignment", cntxt, nloc);
     return NULL; 
   }
 
@@ -1642,18 +1642,18 @@ const char * get_assigned_var( SEXP var ) {
     while ( TYPEOF( v ) == LANGSXP ) {
       if ( Rf_length( v ) < 2 ) {
         Loc nloc = {true, R_NilValue, R_NilValue};
-        cntxt_stop("bad assignment", NULL, nloc);
+        cntxt_stop("bad assignment", cntxt, nloc);
       }
       v = CADR( v );
       if ( v == R_MissingArg ) {
         Loc nloc = {true, R_NilValue, R_NilValue};
-        cntxt_stop("bad assignment", NULL, nloc);
+        cntxt_stop("bad assignment", cntxt, nloc);
       }
     }
 
     if ( TYPEOF( v ) != SYMSXP ) {
       Loc nloc = {true, R_NilValue, R_NilValue};
-      cntxt_stop("bad assignment", NULL, nloc);
+      cntxt_stop("bad assignment", cntxt, nloc);
     }
 
     return CHAR( PRINTNAME(v) ); 
@@ -1712,7 +1712,7 @@ static ExtraVars union_sets(ExtraVars a, ExtraVars b) {
 
 };
 
-ExtraVars find_locals_list( SEXP elist, ExtraVars known_locals ) {
+ExtraVars find_locals_list( SEXP elist, ExtraVars known_locals, CompilerContext *cntxt ) {
 
   // Initialize empty list of locals
   ExtraVars found;
@@ -1727,7 +1727,7 @@ ExtraVars find_locals_list( SEXP elist, ExtraVars known_locals ) {
     SEXP expr = CAR( node );
 
     // Find locals in the expression
-    ExtraVars new_vars = find_locals( expr, known_locals );
+    ExtraVars new_vars = find_locals( expr, known_locals, cntxt );
 
     if ( new_vars.count != 0 ) {
       if (found.count == 0)
@@ -1741,7 +1741,7 @@ ExtraVars find_locals_list( SEXP elist, ExtraVars known_locals ) {
   return found;
 };
 
-ExtraVars find_locals( SEXP expr, ExtraVars known_locals ) {
+ExtraVars find_locals( SEXP expr, ExtraVars known_locals, CompilerContext *cntxt ) {
 
   ExtraVars ret;
   ret.count = 0;
@@ -1755,7 +1755,7 @@ ExtraVars find_locals( SEXP expr, ExtraVars known_locals ) {
 
   // Lambda or anonymous function call
   if ( TYPEOF( fun ) != SYMSXP )
-    return find_locals_list( expr, known_locals );
+    return find_locals_list( expr, known_locals, cntxt );
 
   // Its a function call with a symbol as function name
   const char* fname = CHAR( PRINTNAME( fun ) );
@@ -1764,14 +1764,14 @@ ExtraVars find_locals( SEXP expr, ExtraVars known_locals ) {
   if ( strcmp( fname, "<-" ) == 0 || strcmp( fname, "=" ) == 0 ) {
     
     // Assignment LHS (the variable being assigned to)
-    const char * var =  get_assigned_var( expr );
+    const char * var =  get_assigned_var( expr, cntxt );
 
     ret.count = 1;
     ret.vars = (const char **) R_alloc(1, sizeof(const char *));
     ret.vars[0] = var;
     
     // Recurse into RHS
-    ExtraVars rhs_locals = find_locals( CADDR( expr ), known_locals );
+    ExtraVars rhs_locals = find_locals( CADDR( expr ), known_locals, cntxt );
 
     return union_sets( rhs_locals, ret );
 
@@ -1781,8 +1781,8 @@ ExtraVars find_locals( SEXP expr, ExtraVars known_locals ) {
   if ( strcmp( fname, "for" ) == 0 ) {
 
     const char * loop_var_raw = CHAR( PRINTNAME( CADR( expr ) ) );
-    ExtraVars seq_locals = find_locals( CADDR( expr ), known_locals );
-    ExtraVars body_locals = find_locals( CADDDR( expr ), known_locals );
+    ExtraVars seq_locals = find_locals( CADDR( expr ), known_locals, cntxt );
+    ExtraVars body_locals = find_locals( CADDDR( expr ), known_locals, cntxt );
 
     const char ** loop_var_arr = (const char **) R_alloc(1, sizeof(const char *));
     loop_var_arr[0] = loop_var_raw;
@@ -1814,7 +1814,7 @@ ExtraVars find_locals( SEXP expr, ExtraVars known_locals ) {
     
   }
     
-  return find_locals_list( CDR( expr ), known_locals );
+  return find_locals_list( CDR( expr ), known_locals, cntxt );
 
 };
 
@@ -1907,7 +1907,7 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
   add_cenv_frame( new_cenv, extract_names(forms) );
 
   ExtraVars nullv = {NULL, 0};
-  ExtraVars locals = find_locals_list( forms, nullv );
+  ExtraVars locals = find_locals_list( forms, nullv, cntxt );
 
 
   ExtraVars arg_names = extract_names(forms);
@@ -1916,7 +1916,7 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
 
   while ( true ) {
 
-    ExtraVars new_found = find_locals( body, locals );
+    ExtraVars new_found = find_locals( body, locals, cntxt );
     ExtraVars combined = union_sets( locals, new_found );
 
     if ( combined.count == locals.count )
@@ -2947,7 +2947,7 @@ SEXP compile( SEXP e, SEXP env, SEXP options, SEXP srcref ) {
   CompilerContext * cntxt = make_toplevel_ctx( cenv, options );
   
   ExtraVars empty = { NULL, 0 };
-  add_cenv_vars( cenv, find_locals( e, empty ) );
+  add_cenv_vars( cenv, find_locals( e, empty, cntxt ) );
 
   if ( may_call_browser( e, cntxt ) )
     return e;
@@ -4283,7 +4283,7 @@ bool cmp_assign(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   SEXP lhs = CADR(e);
   SEXP value = CADDR(e);
 
-  SEXP symbol = install( get_assigned_var(e /*, cntxt*/) );
+  SEXP symbol = install( get_assigned_var(e, cntxt) );
 
   if (super_assign && !find_var(symbol, cntxt)) {
     notify_no_super_assign_var(symbol, cntxt, cb_savecurloc(cb));
