@@ -414,7 +414,7 @@ bool find_loc_var( SEXP var, CompilerContext * cntxt );
 SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt );
 bool is_ddsym(SEXP sym);
 SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt );
-bool check_call( SEXP def, SEXP call);
+bool check_call( SEXP def, SEXP call, bool *should_warn);
 bool any_dots( SEXP args );
 static bool is_base_var(SEXP sym, CompilerContext *cntxt);
 static SEXP R_bcVersion();
@@ -694,6 +694,66 @@ static void notify_wrong_break_next(SEXP fun, CompilerContext *cntxt, Loc loc) {
            "%s used in wrong context: no loop is visible",
            name);
   cntxt_warn(msg, cntxt, loc);
+}
+
+static void notify_local_fun(SEXP fun, CompilerContext *cntxt, Loc loc) {
+  (void)fun;
+  (void)cntxt;
+  (void)loc;
+}
+
+static void notify_bad_call(SEXP call, CompilerContext *cntxt, Loc loc) {
+  if (cntxt->options.suppress_all) return;
+
+  const char *call_name = "<call>";
+  if (TYPEOF(call) == LANGSXP && TYPEOF(CAR(call)) == SYMSXP) {
+    call_name = CHAR(PRINTNAME(CAR(call)));
+  }
+
+  char msg[512];
+  snprintf(msg, sizeof(msg), "possible error in '%s': argument matching failed", call_name);
+  cntxt_warn(msg, cntxt, loc);
+}
+
+static void notify_multiple_switch_defaults(CompilerContext *cntxt, Loc loc) {
+  if (cntxt->options.suppress_all) return;
+  cntxt_warn("more than one default provided in switch() call", cntxt, loc);
+}
+
+static void notify_no_switch_cases(CompilerContext *cntxt, Loc loc) {
+  if (cntxt->options.suppress_all) return;
+  cntxt_warn("'switch' with no alternatives", cntxt, loc);
+}
+
+static void notify_assign_syntactic_fun(ExtraVars funs, CompilerContext *cntxt, Loc loc) {
+  if (cntxt->options.suppress_all) return;
+  if (funs.count <= 0) return;
+
+  const char *prefix = (funs.count == 1)
+      ? "local assignment to syntactic function: "
+      : "local assignments to syntactic functions: ";
+
+  int total_len = (int)strlen(prefix) + 1;
+  for (int i = 0; i < funs.count; i++) {
+    total_len += (int)strlen(funs.vars[i]);
+    if (i + 1 < funs.count) total_len += 2;
+  }
+
+  char *msg = (char *) R_alloc(total_len, sizeof(char));
+  msg[0] = '\0';
+  strcat(msg, prefix);
+
+  for (int i = 0; i < funs.count; i++) {
+    strcat(msg, funs.vars[i]);
+    if (i + 1 < funs.count) strcat(msg, ", ");
+  }
+
+  cntxt_warn(msg, cntxt, loc);
+}
+
+static void notify_compiler_error(const char *msg) {
+  if (!msg) return;
+  Rprintf("Error: compilation failed - %s\n", msg);
 }
 
 
@@ -1377,10 +1437,12 @@ SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt ) {
   return R_NilValue; // Not found
 }
 
-bool check_call(SEXP def, SEXP call) {
+bool check_call(SEXP def, SEXP call, bool *should_warn) {
 
   int type = TYPEOF(def);
   int n_protect = 0;
+
+  if (should_warn) *should_warn = false;
 
   if (type == BUILTINSXP || type == SPECIALSXP) {
     SEXP args_call = PROTECT(Rf_lang2(install("args"), def));
@@ -1408,6 +1470,7 @@ bool check_call(SEXP def, SEXP call) {
   SEXP msg_res = R_tryEval(match_call_expr, R_BaseEnv, &err_occurred);
 
   if (err_occurred) {
+    if (should_warn) *should_warn = true;
     UNPROTECT(n_protect);
     return false;
   }
@@ -1797,6 +1860,27 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
 
   }
 
+  const char *special_syntax_funs[] = {"~", "<-", "=", "for", "function", NULL};
+  const char **syntactic = (const char **) R_alloc(locals.count, sizeof(const char *));
+  int syntactic_count = 0;
+
+  for (int i = 0; i < locals.count; i++) {
+    if (is_in_c_set(locals.vars[i], special_syntax_funs)) {
+      syntactic[syntactic_count++] = locals.vars[i];
+    }
+  }
+
+  if (syntactic_count > 0) {
+    ExtraVars sf;
+    sf.vars = syntactic;
+    sf.count = syntactic_count;
+    Loc nloc;
+    nloc.is_null = true;
+    nloc.expr = R_NilValue;
+    nloc.srcref = R_NilValue;
+    notify_assign_syntactic_fun(sf, cntxt, nloc);
+  }
+
   add_cenv_vars( new_cenv, locals );  
   return new_cenv;
 }
@@ -2150,7 +2234,7 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
       DEBUG_PRINT("++ cmp_call: Calling symbol function '%s'\n", CHAR(PRINTNAME(fun)));
 
       if ( find_loc_var(fun,cntxt) ) {
-      // Notify about something?
+        notify_local_fun(fun, cntxt, cb_savecurloc(cb));
       } else {
 
         SEXP def = find_fun_def( fun, cntxt );
@@ -2158,7 +2242,9 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
           notify_undef_fun(fun, cntxt, cb_savecurloc(cb));
         } else {
           DEBUG_PRINT("++ cmp_call: Found function definition for symbol '%s'\n", CHAR(PRINTNAME(fun)));
-          check_call( def, call );
+          bool bad_call = false;
+          check_call( def, call, &bad_call );
+          if (bad_call) notify_bad_call(call, cntxt, cb_savecurloc(cb));
         }
 
       }
@@ -3068,8 +3154,7 @@ bool inline_left_parenthesis( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   if ( length(e) != 2 ) {
 
-    Loc loc = cb_savecurloc(cb);
-    //TODO notify_wrong_arg_count( "(", cntxt, loc );
+    notify_wrong_arg_count(CAR(e), cntxt, cb_savecurloc(cb));
     return cmp_builtin( e, cb, cntxt, false );
   }
 
@@ -4938,7 +5023,9 @@ bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   SEXP fun_sym = CAR(e);
   SEXP def = find_fun_def(fun_sym, cntxt);
   
-  if (!check_call(def, e)) {
+  bool should_warn = false;
+  if (!check_call(def, e, &should_warn)) {
+    if (should_warn) notify_bad_call(e, cntxt, cb_savecurloc(cb));
     return false;
   }
   
@@ -5256,7 +5343,7 @@ bool inline_switch(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
       end_label = cb_makelabel(cb);
 
     if ( length(cases) < 1 ) {
-      // TODO notify no switch cases
+      notify_no_switch_cases(cntxt, cb_savecurloc(cb));
     }
 
     SwitchCase * processed_cases = (SwitchCase*) R_alloc( length(cases), sizeof(SwitchCase) );
@@ -5265,6 +5352,7 @@ bool inline_switch(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     bool okay = preprocess_cases( cases, processed_cases, cb, &has_names );
 
     if ( ! okay ) {
+      notify_multiple_switch_defaults(cntxt, cb_savecurloc(cb));
       cmp_special(e, cb, cntxt);
       return true;
     }
