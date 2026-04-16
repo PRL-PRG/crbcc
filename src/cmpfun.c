@@ -573,49 +573,90 @@ static const char *safe_stats_internals[] = {
 
 #pragma region Notifications
 
-static void cntxt_warn(const char *msg, CompilerContext *cntxt, Loc loc) {
-  if (!msg) return;
+static void get_loc_file_line(Loc loc, const char **file, int *line) {
+  *file = NULL;
+  *line = -1;
+
+  if (loc.is_null || loc.srcref == R_NilValue) {
+    return;
+  }
+
+  SEXP utils_ns = R_FindNamespace(Rf_mkString("utils"));
+  if (utils_ns == R_UnboundValue || TYPEOF(utils_ns) != ENVSXP) {
+    return;
+  }
+
+  SEXP getSrcFilename = Rf_findVarInFrame(utils_ns, Rf_install("getSrcFilename"));
+  SEXP getSrcLocation = Rf_findVarInFrame(utils_ns, Rf_install("getSrcLocation"));
+
+  if (TYPEOF(getSrcFilename) == CLOSXP || TYPEOF(getSrcFilename) == BUILTINSXP || TYPEOF(getSrcFilename) == SPECIALSXP) {
+    int err = 0;
+    SEXP call_fn = PROTECT(Rf_lang2(getSrcFilename, loc.srcref));
+    SEXP fn = PROTECT(R_tryEval(call_fn, utils_ns, &err));
+    if (!err && TYPEOF(fn) == STRSXP && XLENGTH(fn) >= 1 && STRING_ELT(fn, 0) != NA_STRING) {
+      *file = CHAR(STRING_ELT(fn, 0));
+    }
+    UNPROTECT(2);
+  }
+
+  if (TYPEOF(getSrcLocation) == CLOSXP || TYPEOF(getSrcLocation) == BUILTINSXP || TYPEOF(getSrcLocation) == SPECIALSXP) {
+    int err = 0;
+    SEXP what = PROTECT(Rf_mkString("line"));
+    SEXP call_ln = PROTECT(Rf_lang3(getSrcLocation, loc.srcref, what));
+    SEXP ln = PROTECT(R_tryEval(call_ln, utils_ns, &err));
+    if (!err && TYPEOF(ln) == INTSXP && XLENGTH(ln) >= 1 && INTEGER(ln)[0] != NA_INTEGER) {
+      *line = INTEGER(ln)[0];
+    } else if (!err && TYPEOF(ln) == REALSXP && XLENGTH(ln) >= 1) {
+      *line = (int) REAL(ln)[0];
+    }
+    UNPROTECT(3);
+  }
+}
+
+static char *add_loc_string(const char *msg, Loc loc) {
+  if (!msg) msg = "";
 
   const char *file = NULL;
   int line = -1;
+  get_loc_file_line(loc, &file, &line);
 
-  if (!loc.is_null && loc.srcref != R_NilValue) {
-    SEXP utils_ns = R_FindNamespace(Rf_mkString("utils")); // may allocate
-    if (utils_ns != R_UnboundValue && TYPEOF(utils_ns) == ENVSXP) {
-      SEXP getSrcFilename = Rf_findVarInFrame(utils_ns, Rf_install("getSrcFilename"));
-      SEXP getSrcLocation = Rf_findVarInFrame(utils_ns, Rf_install("getSrcLocation"));
+  int needed = (int)strlen(msg) + 1;
+  if (file && line > 0) needed += (int)strlen(file) + 32;
 
-      if (TYPEOF(getSrcFilename) == CLOSXP || TYPEOF(getSrcFilename) == BUILTINSXP || TYPEOF(getSrcFilename) == SPECIALSXP) {
-        int err = 0;
-        SEXP call_fn = PROTECT(Rf_lang2(getSrcFilename, loc.srcref));
-        SEXP fn = PROTECT(R_tryEval(call_fn, utils_ns, &err));
-        if (!err && TYPEOF(fn) == STRSXP && XLENGTH(fn) >= 1 && STRING_ELT(fn, 0) != NA_STRING) {
-          file = CHAR(STRING_ELT(fn, 0));
-        }
-        UNPROTECT(2);
-      }
-
-      if (TYPEOF(getSrcLocation) == CLOSXP || TYPEOF(getSrcLocation) == BUILTINSXP || TYPEOF(getSrcLocation) == SPECIALSXP) {
-        int err = 0;
-        SEXP what = PROTECT(Rf_mkString("line"));
-        SEXP call_ln = PROTECT(Rf_lang3(getSrcLocation, loc.srcref, what));
-        SEXP ln = PROTECT(R_tryEval(call_ln, utils_ns, &err));
-        if (!err && TYPEOF(ln) == INTSXP && XLENGTH(ln) >= 1 && INTEGER(ln)[0] != NA_INTEGER) {
-          line = INTEGER(ln)[0];
-        } else if (!err && TYPEOF(ln) == REALSXP && XLENGTH(ln) >= 1) {
-          line = (int) REAL(ln)[0];
-        }
-        UNPROTECT(3);
-      }
-    }
-  }
-
+  char *full = (char *) R_alloc(needed, sizeof(char));
   if (file && line > 0) {
-    Rprintf("Note: %s at %s:%d\n", msg, file, line);
+    snprintf(full, needed, "%s at %s:%d", msg, file, line);
   } else {
-    Rprintf("Note: %s\n", msg);
+    snprintf(full, needed, "%s", msg);
   }
+
+  return full;
+}
+
+static void cntxt_warn(const char *msg, CompilerContext *cntxt, Loc loc) {
+  if (!msg) return;
+  (void)cntxt;
+
+  char *full = add_loc_string(msg, loc);
+  Rprintf("Note: %s\n", full);
 };
+
+static void cntxt_stop(const char *msg, CompilerContext *cntxt, Loc loc) {
+  char *full = add_loc_string(msg, loc);
+
+  SEXP simple_error_sym = Rf_install("simpleError");
+  SEXP stop_sym = Rf_install("stop");
+
+  SEXP msg_sexp = PROTECT(Rf_mkString(full));
+  SEXP call_obj = (cntxt && cntxt->call != R_NilValue) ? cntxt->call : R_NilValue;
+  SEXP se_call = PROTECT(Rf_lang3(simple_error_sym, msg_sexp, call_obj));
+  SEXP cond = PROTECT(Rf_eval(se_call, R_BaseEnv));
+  SEXP stop_call = PROTECT(Rf_lang2(stop_sym, cond));
+
+  Rf_eval(stop_call, R_BaseEnv);
+
+  UNPROTECT(4);
+}
 
 static void notify_wrong_dots_use(SEXP var, CompilerContext *cntxt, Loc loc) {
   if (cntxt->options.suppress_all) return;
@@ -1010,9 +1051,7 @@ void cmp_builtin_args(SEXP args, CodeBuffer *cb, CompilerContext *cntxt, bool mi
         cmp_tag(n, cb);
       
       } else {
-    
-        Loc loc = cb_savecurloc(cb);
-        Rf_error("goodbye");
+        cntxt_stop("missing arguments are not allowed", cntxt, cb_savecurloc(cb));
 
       }
 
@@ -1589,7 +1628,8 @@ const char * get_assigned_var( SEXP var ) {
   SEXP v = CADR( var );
 
   if ( v == R_MissingArg ) {
-    Rf_error("Bad assignment");
+    Loc nloc = {true, R_NilValue, R_NilValue};
+    cntxt_stop("bad assignment", NULL, nloc);
     return NULL; 
   }
 
@@ -1600,12 +1640,21 @@ const char * get_assigned_var( SEXP var ) {
   else {
     // Handle complex assignments names(x) <- 1
     while ( TYPEOF( v ) == LANGSXP ) {
-      if ( Rf_length( v ) < 2 ) Rf_error("Bad assignment");
+      if ( Rf_length( v ) < 2 ) {
+        Loc nloc = {true, R_NilValue, R_NilValue};
+        cntxt_stop("bad assignment", NULL, nloc);
+      }
       v = CADR( v );
-      if ( v == R_MissingArg ) Rf_error("Bad assignment");
+      if ( v == R_MissingArg ) {
+        Loc nloc = {true, R_NilValue, R_NilValue};
+        cntxt_stop("bad assignment", NULL, nloc);
+      }
     }
 
-    if ( TYPEOF( v ) != SYMSXP ) Rf_error("Bad assignment");
+    if ( TYPEOF( v ) != SYMSXP ) {
+      Loc nloc = {true, R_NilValue, R_NilValue};
+      cntxt_stop("bad assignment", NULL, nloc);
+    }
 
     return CHAR( PRINTNAME(v) ); 
   }
@@ -1692,10 +1741,6 @@ ExtraVars find_locals_list( SEXP elist, ExtraVars known_locals ) {
   return found;
 };
 
-/*
-TODO: refactor find_locals to avoid deep recursion on large expressions
-      use a todo list like in the reference
-*/
 ExtraVars find_locals( SEXP expr, ExtraVars known_locals ) {
 
   ExtraVars ret;
@@ -2368,12 +2413,11 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
     }
 
     if ( TYPEOF(a) == BCODESXP ) {
-      //TODO swap this for ctx_stop
-      error( "cannot compile byte code literals in code" );
+      cntxt_stop("cannot compile byte code literals in code", cntxt, cb_savecurloc(cb));
     }
 
     if ( TYPEOF(a) == PROMSXP ) {
-      error( "cannot compiler promise literals in code" );
+      cntxt_stop("cannot compile promise literals in code", cntxt, cb_savecurloc(cb));
     }
 
 
@@ -2677,13 +2721,12 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
 
       case BCODESXP:
         DEBUG_PRINT("!! cmp: Error - Literal Bytecode found\n");
-        Rf_error("Cannot compile bytecode");
-        // TODO add context and location info
+        cntxt_stop("cannot compile byte code literals in code", cntxt, cb_savecurloc(cb));
         break;
 
       case PROMSXP:
         DEBUG_PRINT("!! cmp: Error - Literal Promise found\n");
-        Rf_error("Cannot compile promise");
+        cntxt_stop("cannot compile promise literals in code", cntxt, cb_savecurloc(cb));
         break;
 
       default:
@@ -3780,7 +3823,7 @@ bool cmp_math_1(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
   }
 
   if ( idx == -1 ) {
-    Rf_error("Noooo");
+    cntxt_stop("cannot compile this expression", cntxt, cb_savecurloc(cb));
   }
 
   Loc loc = cb_savecurloc(cb);
@@ -4021,7 +4064,7 @@ void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, Com
   cb_setcurexpr(cb, cexpr);
 
   if (afun == R_NilValue) {
-    Rf_error("invalid function in complex assignment");
+    cntxt_stop("invalid function in complex assignment", cntxt, cb_savecurloc(cb));
   }
   else if (TYPEOF(afun) == SYMSXP) {
     if (!try_setter_inline(afun, place, origplace, acall, cb, ncntxt)) {
@@ -4058,14 +4101,14 @@ FlattenedPlace flatten_place(SEXP place, CompilerContext *cntxt, Loc loc) {
 
   while (TYPEOF(p) == LANGSXP) {
     if (length(p) < 2) {
-      Rf_error("bad assignment 1"); 
+      cntxt_stop("bad assignment 1", cntxt, loc); 
     }
     count++;
     p = CADR(p);
   }
 
   if (TYPEOF(p) != SYMSXP) {
-    Rf_error("bad assignment 2");
+    cntxt_stop("bad assignment 2", cntxt, loc);
   }
 
   SEXP places = PROTECT(allocVector(VECSXP, count));
@@ -4518,8 +4561,8 @@ bool inline_subset2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 bool cmp_subassign_dispatch(int start_op, dlftop dfltop, SEXP afun, SEXP place, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
 
   if ( dots_or_missing(place) || has_names(place) || length(place) < 3 ) {
-    //TODO cannot compile this
-    Rf_error("x");
+    cntxt_stop("cannot compile this expression", cntxt, cb_savecurloc(cb));
+    return false;
   } else {
     int ci = PUTCONST(call);
     int label = cb_makelabel(cb);
@@ -4628,8 +4671,7 @@ bool cmp_subset_getter_dispatch(int start_op, dlftop dfltop, SEXP call, CodeBuff
 
   // Fallback if missing args, named args, or insufficient length
   if ( dots_or_missing(call) || has_names(call) || length(call) < 3 ) {
-    //TODO cannot compile this expression
-    Rf_error("cannot compile this expression");
+    cntxt_stop("cannot compile this expression", cntxt, cb_savecurloc(cb));
     return false;
   } else {
     
