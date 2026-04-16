@@ -573,6 +573,13 @@ static const char *safe_stats_internals[] = {
 
 #pragma region Notifications
 
+static char *ralloc_strdup(const char *src) {
+  size_t n = strlen(src) + 1;
+  char *dst = (char *) R_alloc(n, sizeof(char));
+  memcpy(dst, src, n);
+  return dst;
+}
+
 static void get_loc_file_line(Loc loc, const char **file, int *line) {
   *file = NULL;
   *line = -1;
@@ -589,17 +596,20 @@ static void get_loc_file_line(Loc loc, const char **file, int *line) {
   SEXP getSrcFilename = Rf_findVarInFrame(utils_ns, Rf_install("getSrcFilename"));
   SEXP getSrcLocation = Rf_findVarInFrame(utils_ns, Rf_install("getSrcLocation"));
 
-  if (TYPEOF(getSrcFilename) == CLOSXP || TYPEOF(getSrcFilename) == BUILTINSXP || TYPEOF(getSrcFilename) == SPECIALSXP) {
+  if (getSrcFilename != R_UnboundValue) {
     int err = 0;
     SEXP call_fn = PROTECT(Rf_lang2(getSrcFilename, loc.srcref));
     SEXP fn = PROTECT(R_tryEval(call_fn, utils_ns, &err));
-    if (!err && TYPEOF(fn) == STRSXP && LENGTH(fn) >= 1 && STRING_ELT(fn, 0) != NA_STRING) {
-      *file = CHAR(STRING_ELT(fn, 0));
+    if (!err && TYPEOF(fn) == STRSXP && LENGTH(fn) >= 1) {
+      SEXP s = STRING_ELT(fn, 0);
+      if (s != NA_STRING) {
+        *file = ralloc_strdup(CHAR(s));
+      }
     }
     UNPROTECT(2);
   }
 
-  if (TYPEOF(getSrcLocation) == CLOSXP || TYPEOF(getSrcLocation) == BUILTINSXP || TYPEOF(getSrcLocation) == SPECIALSXP) {
+  if (getSrcLocation != R_UnboundValue) {
     int err = 0;
     SEXP what = PROTECT(Rf_mkString("line"));
     SEXP call_ln = PROTECT(Rf_lang3(getSrcLocation, loc.srcref, what));
@@ -801,7 +811,7 @@ static char *format_bad_assignment_msg(SEXP expr) {
   SEXP deparse_call = PROTECT(Rf_lang2(Rf_install("deparse"), expr));
   SEXP de = PROTECT(Rf_eval(deparse_call, R_BaseEnv));
 
-  if (TYPEOF(de) != STRSXP || LENGTH(de) == 0 || STRING_ELT(de, 0) == NA_STRING) {
+  if (TYPEOF(de) != STRSXP || LENGTH(de) == 0) {
     char *fallback = (char *) R_alloc(15, sizeof(char));
     snprintf(fallback, 15, "bad assignment");
     UNPROTECT(2);
@@ -809,7 +819,14 @@ static char *format_bad_assignment_msg(SEXP expr) {
   }
 
   if (LENGTH(de) == 1) {
-    const char *line = CHAR(STRING_ELT(de, 0));
+    SEXP s = STRING_ELT(de, 0);
+    if (s == NA_STRING) {
+      char *fallback = (char *) R_alloc(15, sizeof(char));
+      snprintf(fallback, 15, "bad assignment");
+      UNPROTECT(2);
+      return fallback;
+    }
+    const char *line = CHAR(s);
     int needed = 17 + (int)strlen(line) + 1;
     char *msg = (char *) R_alloc(needed, sizeof(char));
     snprintf(msg, needed, "bad assignment: '%s'", line);
@@ -819,8 +836,9 @@ static char *format_bad_assignment_msg(SEXP expr) {
 
   int needed = 17; // "bad assignment: " + nul
   for (R_xlen_t i = 0; i < LENGTH(de); i++) {
-    if (STRING_ELT(de, i) != NA_STRING) {
-      needed += 5 + (int)strlen(CHAR(STRING_ELT(de, i)));
+    SEXP s = STRING_ELT(de, i);
+    if (s != NA_STRING) {
+      needed += 5 + (int)strlen(CHAR(s));
     }
   }
 
@@ -828,9 +846,10 @@ static char *format_bad_assignment_msg(SEXP expr) {
   strcpy(msg, "bad assignment:");
 
   for (R_xlen_t i = 0; i < LENGTH(de); i++) {
-    if (STRING_ELT(de, i) != NA_STRING) {
+    SEXP s = STRING_ELT(de, i);
+    if (s != NA_STRING) {
       strcat(msg, "\n    ");
-      strcat(msg, CHAR(STRING_ELT(de, i)));
+      strcat(msg, CHAR(s));
     }
   }
 
