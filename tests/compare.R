@@ -8,13 +8,13 @@ PACKAGES = c("compiler", "base", "tools", "stats", "utils")
 # Print result reference and crbcc outputs
 # Outputs latest compiled without errors,
 # on mismatch look at diff
-DUMP_BC <- TRUE
+DUMP_BC <- FALSE
 DUMP_BC_PATH <- "tests/bc"
 
 # Old performance benchmarks, use ./tests/perf.R
 # to measure performance
 BENCHMARK <- FALSE
-B_ITERS <- 10
+B_ITERS <- 1
 ###########################
 
 
