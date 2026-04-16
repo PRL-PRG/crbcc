@@ -593,7 +593,7 @@ static void get_loc_file_line(Loc loc, const char **file, int *line) {
     int err = 0;
     SEXP call_fn = PROTECT(Rf_lang2(getSrcFilename, loc.srcref));
     SEXP fn = PROTECT(R_tryEval(call_fn, utils_ns, &err));
-    if (!err && TYPEOF(fn) == STRSXP && XLENGTH(fn) >= 1 && STRING_ELT(fn, 0) != NA_STRING) {
+    if (!err && TYPEOF(fn) == STRSXP && LENGTH(fn) >= 1 && STRING_ELT(fn, 0) != NA_STRING) {
       *file = CHAR(STRING_ELT(fn, 0));
     }
     UNPROTECT(2);
@@ -604,9 +604,9 @@ static void get_loc_file_line(Loc loc, const char **file, int *line) {
     SEXP what = PROTECT(Rf_mkString("line"));
     SEXP call_ln = PROTECT(Rf_lang3(getSrcLocation, loc.srcref, what));
     SEXP ln = PROTECT(R_tryEval(call_ln, utils_ns, &err));
-    if (!err && TYPEOF(ln) == INTSXP && XLENGTH(ln) >= 1 && INTEGER(ln)[0] != NA_INTEGER) {
+    if (!err && TYPEOF(ln) == INTSXP && LENGTH(ln) >= 1 && INTEGER(ln)[0] != NA_INTEGER) {
       *line = INTEGER(ln)[0];
-    } else if (!err && TYPEOF(ln) == REALSXP && XLENGTH(ln) >= 1) {
+    } else if (!err && TYPEOF(ln) == REALSXP && LENGTH(ln) >= 1) {
       *line = (int) REAL(ln)[0];
     }
     UNPROTECT(3);
@@ -795,6 +795,47 @@ static void notify_assign_syntactic_fun(ExtraVars funs, CompilerContext *cntxt, 
 static void notify_compiler_error(const char *msg) {
   if (!msg) return;
   Rprintf("Error: compilation failed - %s\n", msg);
+}
+
+static char *format_bad_assignment_msg(SEXP expr) {
+  SEXP deparse_call = PROTECT(Rf_lang2(Rf_install("deparse"), expr));
+  SEXP de = PROTECT(Rf_eval(deparse_call, R_BaseEnv));
+
+  if (TYPEOF(de) != STRSXP || LENGTH(de) == 0 || STRING_ELT(de, 0) == NA_STRING) {
+    char *fallback = (char *) R_alloc(15, sizeof(char));
+    snprintf(fallback, 15, "bad assignment");
+    UNPROTECT(2);
+    return fallback;
+  }
+
+  if (LENGTH(de) == 1) {
+    const char *line = CHAR(STRING_ELT(de, 0));
+    int needed = 17 + (int)strlen(line) + 1;
+    char *msg = (char *) R_alloc(needed, sizeof(char));
+    snprintf(msg, needed, "bad assignment: '%s'", line);
+    UNPROTECT(2);
+    return msg;
+  }
+
+  int needed = 17; // "bad assignment: " + nul
+  for (R_xlen_t i = 0; i < LENGTH(de); i++) {
+    if (STRING_ELT(de, i) != NA_STRING) {
+      needed += 5 + (int)strlen(CHAR(STRING_ELT(de, i)));
+    }
+  }
+
+  char *msg = (char *) R_alloc(needed, sizeof(char));
+  strcpy(msg, "bad assignment:");
+
+  for (R_xlen_t i = 0; i < LENGTH(de); i++) {
+    if (STRING_ELT(de, i) != NA_STRING) {
+      strcat(msg, "\n    ");
+      strcat(msg, CHAR(STRING_ELT(de, i)));
+    }
+  }
+
+  UNPROTECT(2);
+  return msg;
 }
 
 
@@ -1629,7 +1670,7 @@ const char * get_assigned_var( SEXP var, CompilerContext *cntxt ) {
 
   if ( v == R_MissingArg ) {
     Loc nloc = {true, R_NilValue, R_NilValue};
-    cntxt_stop("bad assignment", cntxt, nloc);
+    cntxt_stop(format_bad_assignment_msg(var), cntxt, nloc);
     return NULL; 
   }
 
@@ -1642,18 +1683,18 @@ const char * get_assigned_var( SEXP var, CompilerContext *cntxt ) {
     while ( TYPEOF( v ) == LANGSXP ) {
       if ( Rf_length( v ) < 2 ) {
         Loc nloc = {true, R_NilValue, R_NilValue};
-        cntxt_stop("bad assignment", cntxt, nloc);
+        cntxt_stop(format_bad_assignment_msg(var), cntxt, nloc);
       }
       v = CADR( v );
       if ( v == R_MissingArg ) {
         Loc nloc = {true, R_NilValue, R_NilValue};
-        cntxt_stop("bad assignment", cntxt, nloc);
+        cntxt_stop(format_bad_assignment_msg(var), cntxt, nloc);
       }
     }
 
     if ( TYPEOF( v ) != SYMSXP ) {
       Loc nloc = {true, R_NilValue, R_NilValue};
-      cntxt_stop("bad assignment", cntxt, nloc);
+      cntxt_stop(format_bad_assignment_msg(var), cntxt, nloc);
     }
 
     return CHAR( PRINTNAME(v) ); 
