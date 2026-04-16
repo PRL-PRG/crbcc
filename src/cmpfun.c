@@ -1437,6 +1437,31 @@ SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt ) {
   return R_NilValue; // Not found
 }
 
+static SEXP eval_match_call(SEXP def, SEXP call, bool expand_dots, bool *had_error) {
+  if (had_error) *had_error = false;
+
+  SEXP quoted_call = PROTECT(Rf_lang2(install("quote"), call));
+  SEXP match_call_expr;
+
+  if (expand_dots) {
+    match_call_expr = PROTECT(Rf_lang3(install("match.call"), def, quoted_call));
+  } else {
+    match_call_expr = PROTECT(Rf_lang4(install("match.call"), def, quoted_call, R_FalseValue));
+  }
+
+  int err_occurred = 0;
+  SEXP matched_call = R_tryEval(match_call_expr, R_BaseEnv, &err_occurred);
+
+  if (err_occurred) {
+    if (had_error) *had_error = true;
+    UNPROTECT(2);
+    return R_NilValue;
+  }
+
+  UNPROTECT(2);
+  return matched_call;
+}
+
 bool check_call(SEXP def, SEXP call, bool *should_warn) {
 
   int type = TYPEOF(def);
@@ -1462,14 +1487,10 @@ bool check_call(SEXP def, SEXP call, bool *should_warn) {
     return false;
   }
 
-  SEXP quoted_call = PROTECT(Rf_lang2(install("quote"), call));
-  SEXP match_call_expr = PROTECT(Rf_lang3(install("match.call"), def, quoted_call));
-  n_protect += 2;
+  bool err_occurred = false;
+  SEXP matched = eval_match_call(def, call, true, &err_occurred);
 
-  int err_occurred = 0;
-  SEXP msg_res = R_tryEval(match_call_expr, R_BaseEnv, &err_occurred);
-
-  if (err_occurred) {
+  if (matched == R_NilValue && err_occurred) {
     if (should_warn) *should_warn = true;
     UNPROTECT(n_protect);
     return false;
@@ -4800,11 +4821,13 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def) {
     
     SEXP icall = CADR(b);
     
-    SEXP match_call_sym = install("match.call");
-    SEXP quote_sym = install("quote");
-    SEXP quoted_e = PROTECT(Rf_lang2(quote_sym, e));
-    SEXP mcall_expr = PROTECT(Rf_lang4(match_call_sym, def, quoted_e, R_FalseValue));
-    SEXP matched_call = PROTECT(Rf_eval(mcall_expr, R_BaseEnv));
+    bool match_err = false;
+    SEXP matched_call_raw = eval_match_call(def, e, false, &match_err);
+    if (matched_call_raw == R_NilValue && match_err) {
+      return R_NilValue;
+    }
+
+    SEXP matched_call = PROTECT(matched_call_raw);
     
     SEXP args_head = R_NilValue;
     SEXP args_tail = R_NilValue;
@@ -4850,7 +4873,7 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def) {
     SEXP dot_internal_sym = install(".Internal");
     SEXP final_call = PROTECT(Rf_lang2(dot_internal_sym, inner_call));
     
-    UNPROTECT(6); // quoted_e, mcall_expr, matched_call, args_head, inner_call, final_call 
+    UNPROTECT(4); // matched_call, args_head, inner_call, final_call 
     
     return final_call;
     
