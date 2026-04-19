@@ -3,7 +3,13 @@
 # All paths relative to root, comparing crbcc
 # bytecode to GNU-R
 ###########################
-PACKAGES = c("compiler", "base", "tools", "stats", "utils")
+PACKAGES = c(
+  "base", "compiler", "graphics", "grDevices", "grid",
+  "methods", "parallel", "splines", "stats", "stats4", "tcltk",
+  "tools", "utils", "boot", "class", "cluster", "codetools",
+  "foreign", "KernSmooth", "lattice", "MASS", "Matrix", "mgcv",
+  "nlme", "nnet", "rpart", "spatial", "survival", "ggplot2"
+)
 
 # Print result reference and crbcc outputs
 # Outputs latest compiled without errors,
@@ -128,6 +134,11 @@ benchmark_compilers <- function(prog, iters = 10, dump_bytecode = TRUE, torture 
 }
 
 test_package <- function(package, torture=FALSE) {
+
+  if (!requireNamespace(package, quietly = TRUE)) {
+    cat(sprintf("\n[SKIP] Package not available: %s\n", package))
+    return(invisible(NULL))
+  }
 
   ns <- getNamespace(package)
   symbols <- ls(ns, all.names=T)
