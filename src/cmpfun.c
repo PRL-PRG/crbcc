@@ -1032,9 +1032,10 @@ static SEXP constant_fold_call(SEXP e, CompilerContext* cntxt) {
 
       UNPROTECT(4);    // new_call, arglist, folded_values, arg_tags
       return R_NilValue;
+    } else {
+      UNPROTECT(2);    // folded_values, arg_tags
     }
   }
-
   }
 
   return R_NilValue;
@@ -1115,6 +1116,14 @@ void cmp_builtin_args(SEXP args, CodeBuffer *cb, CompilerContext *cntxt, bool mi
 
       }
 
+    } else if (TYPEOF(a) == BCODESXP) {
+
+      cntxt_stop("cannot compile byte code literals in code", cntxt, cb_savecurloc(cb));
+
+    } else if (TYPEOF(a) == PROMSXP) {
+
+      cntxt_stop("cannot compile promise literals in code", cntxt, cb_savecurloc(cb));
+    
     } else {
 
       if (TYPEOF(a) == SYMSXP) {
