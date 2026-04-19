@@ -781,7 +781,7 @@ static void notify_assign_syntactic_fun(ExtraVars funs, CompilerContext *cntxt, 
   if (funs.count <= 0) return;
 
   const char *prefix = (funs.count == 1)
-      ? "local assignment to syntactic function: "
+      ? "local assignment to syntactic function:  "
       : "local assignments to syntactic functions: ";
 
   int total_len = (int)strlen(prefix) + 1;
@@ -1021,7 +1021,7 @@ static SEXP constant_fold_call(SEXP e, CompilerContext* cntxt) {
         SEXP new_call = PROTECT( LCONS(ffun, arglist) );
 
         int error = 0;
-        SEXP result = R_tryEval(new_call, R_BaseEnv, &error);
+        SEXP result = R_tryEval(new_call, cntxt->env->r_env, &error);
 
         if (!error) {
           PROTECT(result);                                  // +1
@@ -2388,11 +2388,12 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
       const char* ch = CHAR( PRINTNAME( CAR( fun ) ) );
       if ( (strcmp( ch, "break" ) == 0) || (strcmp( ch, "next" ) == 0) ) {
         cmp( fun, cb, cntxt, false, true );
-      } else {
-        cmp_call_expr_fun( fun, args, call, cb, cntxt );
+        return;
       }
     }
-  
+
+    cmp_call_expr_fun( fun, args, call, cb, cntxt );
+
   }
 
   cb_restorecurloc( cb, saved );
@@ -3327,7 +3328,7 @@ bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   DEBUG_PRINT("[_] Inlining if statement");
-  // **** TEST FOR MISSING **** //
+
   SEXP test = CADR( e );
   SEXP then = CADDR( e );
   SEXP eelse = R_NilValue;
@@ -3343,20 +3344,31 @@ bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   if ( ! Rf_isNull(ct) ) {
 
     SEXP value = VECTOR_ELT( ct, 0 );
-    // TODO ! isNA function
+
     if (Rf_isLogical( value ) && length( value ) == 1) {
 
-      if ( asLogical( value ) )
+      int v = LOGICAL_ELT(value, 0);
+
+      if ( v == TRUE ) {
+
         cmp( then, cb, cntxt, false, true );
-      else if ( has_else )
-        cmp( eelse, cb, cntxt, false, true );
-      else if (cntxt->tailcall)
-        PUTCODES( LDNULL_OP, INVISIBLE_OP, RETURN_OP );
-      else
-        PUTCODE( LDNULL_OP);
+        return true;
+      
+      } else if ( v == FALSE ) {
+      
+        if ( has_else )
+          cmp( eelse, cb, cntxt, false, true );
+        else if (cntxt->tailcall)
+          PUTCODES( LDNULL_OP, INVISIBLE_OP, RETURN_OP );
+        else
+          PUTCODE( LDNULL_OP);
 
-      return true;
+        return true;
+      
+      }
 
+      // if v is NA_LOGICAL, no folding
+      
     }
 
   }
