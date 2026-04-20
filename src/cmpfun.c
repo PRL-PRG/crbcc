@@ -3853,7 +3853,7 @@ bool inline_log(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
   
   if (dots_or_missing(e) || !isNull(getAttrib(e, R_NamesSymbol)) || length(e) < 2 || length(e) > 3) {
 
-    cmp_special(e, cb, cntxt);
+    return cmp_special(e, cb, cntxt);
 
   } else {
 
