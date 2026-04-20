@@ -11,10 +11,24 @@ PACKAGES = c(
   "nlme", "nnet", "rpart", "spatial", "survival", "ggplot2"
 )
 
+PACKAGES = c("scales")
+# If TRUE, ignore PACKAGES and pull top N CRAN packages by downloads.
+DO_CRAN_COMPARE <- FALSE
+N_CRAN <- 50
+CRAN_WHEN <- "last-week"
+CRAN_FALLBACK_TO_STATIC <- FALSE
+
+# If TRUE (and DO_CRAN_COMPARE=TRUE), remove tested CRAN packages after run.
+# Base/recommended packages are never removed.
+REMOVE_PACKAGES_AFTER_TEST <- FALSE
+
+# If TRUE, install missing target packages before running checks.
+INSTALL_MISSING_PACKAGES <- FALSE
+
 # Print result reference and crbcc outputs
 # Outputs latest compiled without errors,
 # on mismatch look at diff
-DUMP_BC <- FALSE
+DUMP_BC <- TRUE
 DUMP_BC_PATH <- "tests/bc"
 
 # Old performance benchmarks, use ./tests/perf.R
@@ -22,6 +36,85 @@ DUMP_BC_PATH <- "tests/bc"
 BENCHMARK <- FALSE
 B_ITERS <- 1
 ###########################
+
+resolve_packages <- function() {
+  if (!isTRUE(DO_CRAN_COMPARE)) {
+    return(list(packages = PACKAGES, source = "static"))
+  }
+
+  if (requireNamespace("cranlogs", quietly = TRUE)) {
+    top <- cranlogs::cran_top_downloads(when = CRAN_WHEN, count = N_CRAN)
+    pkgs <- unique(top$package)
+    cat(sprintf("[INFO] Using cranlogs top %d packages (%s).\n", length(pkgs), CRAN_WHEN))
+    return(list(packages = pkgs, source = "cranlogs"))
+  }
+
+  if (!isTRUE(CRAN_FALLBACK_TO_STATIC)) {
+    stop("DO_CRAN_COMPARE=TRUE but neither 'cranlogs' nor 'pkgsearch' is installed. Install one of them or set CRAN_FALLBACK_TO_STATIC=TRUE.")
+  }
+
+  warning("DO_CRAN_COMPARE=TRUE but neither 'cranlogs' nor 'pkgsearch' is installed; falling back to PACKAGES.")
+  list(packages = PACKAGES, source = "static-fallback")
+}
+
+install_missing_packages <- function(pkgs) {
+  installed_before <- rownames(installed.packages())
+  missing <- setdiff(pkgs, installed_before)
+
+  if (length(missing) == 0) {
+    cat("[INFO] All target packages already installed.\n")
+    return(character(0))
+  }
+
+  if (!isTRUE(INSTALL_MISSING_PACKAGES)) {
+    cat(sprintf("[INFO] Missing packages (%d) will not be installed (INSTALL_MISSING_PACKAGES=FALSE).\n", length(missing)))
+    return(character(0))
+  }
+
+  cat(sprintf("[INFO] Installing %d missing package(s) before checks...\n", length(missing)))
+  for (pkg in missing) {
+    tryCatch({
+      utils::install.packages(pkg)
+      cat(sprintf("[INFO] Installed: %s\n", pkg))
+    }, error = function(e) {
+      cat(sprintf("[WARN] Failed to install %s: %s\n", pkg, conditionMessage(e)))
+    })
+  }
+
+  installed_after <- rownames(installed.packages())
+  newly_installed <- intersect(missing, installed_after)
+  cat(sprintf("[INFO] Newly installed this run: %d\n", length(newly_installed)))
+  newly_installed
+}
+
+remove_newly_installed_packages <- function(pkgs) {
+  if (!isTRUE(REMOVE_PACKAGES_AFTER_TEST)) {
+    return(invisible(NULL))
+  }
+
+  if (length(pkgs) == 0) {
+    cat("[INFO] No newly installed packages to remove.\n")
+    return(invisible(NULL))
+  }
+
+  installed_now <- rownames(installed.packages())
+  removable <- intersect(pkgs, installed_now)
+
+  if (length(removable) == 0) {
+    cat("[INFO] Newly installed packages are already absent; nothing to remove.\n")
+    return(invisible(NULL))
+  }
+
+  cat(sprintf("[CLEANUP] Removing %d newly installed package(s)...\n", length(removable)))
+  for (pkg in removable) {
+    tryCatch({
+      utils::remove.packages(pkg)
+      cat(sprintf("[CLEANUP] Removed: %s\n", pkg))
+    }, error = function(e) {
+      cat(sprintf("[CLEANUP] Failed to remove %s: %s\n", pkg, conditionMessage(e)))
+    })
+  }
+}
 
 
 compare_bytecode_strict <- function(bc1, bc2, path = "Root") {
@@ -198,9 +291,7 @@ test_package <- function(package, torture=FALSE) {
       cat(sprintf("Stopped at: %s\n", func_id))
       cat(sprintf("Error: %s\n", e$message))
       cat(sprintf("========================================\n\n"))
-      
-      print(uncompiled_funs[[i]])
-      
+           
       readLines(con = "stdin", n = 1)
       
       stop("Test suite halted due to fatal crash.")
@@ -217,7 +308,19 @@ test_package <- function(package, torture=FALSE) {
 
 }
 
-for (i in PACKAGES) {
-  cat(sprintf("\n[START] Compiling package: %s ", i))
-  test_package(i)
+run_compare <- function() {
+  resolved <- resolve_packages()
+  packages_to_test <- resolved$packages
+  source <- resolved$source
+  cat(sprintf("[INFO] Package source: %s\n", source))
+
+  newly_installed <- install_missing_packages(packages_to_test)
+  on.exit(remove_newly_installed_packages(newly_installed), add = TRUE)
+
+  for (i in packages_to_test) {
+    cat(sprintf("\n[START] Compiling package: %s ", i))
+    test_package(i)
+  }
 }
+
+run_compare()
