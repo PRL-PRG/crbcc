@@ -1135,7 +1135,6 @@ void cmp_builtin_args(SEXP args, CodeBuffer *cb, CompilerContext *cntxt, bool mi
           cmp_sym(a, cb, ncntxt, missingOK);
           PUTCODE( PUSHARG_OP );
         } else {
-          // TODO constant folded to a constant?
           SEXP ca_value = VECTOR_ELT(ca, 0); 
           cmp_const_arg(ca_value, cb, cntxt);
         }
@@ -1462,10 +1461,10 @@ void cb_patchlabels(CodeBuffer * cb) {
 
 SEXP extract_srcref(SEXP sref, int idx) {
 
-  if ( Rf_isList(sref) && Rf_length(sref) >= idx )
-    return VECTOR_ELT(sref, idx - 1);
+  if ( TYPEOF(sref) == VECSXP && LENGTH(sref) >= idx )
+    return VECTOR_ELT(sref, idx-1);
 
-  if ( Rf_isInteger(sref) && Rf_length(sref) >= 6 )
+  if ( TYPEOF(sref) == INTSXP && LENGTH(sref) >= 6 )
     return sref;
 
   return R_NilValue;
@@ -1473,7 +1472,7 @@ SEXP extract_srcref(SEXP sref, int idx) {
 }
 
 SEXP get_expr_srcref(SEXP expr) {
-  SEXP sattr = Rf_getAttrib(expr, Rf_install("srcref"));
+  SEXP sattr = getAttrib(expr, install("srcref"));
   return extract_srcref(sattr, 1);
 }
 
@@ -1485,6 +1484,7 @@ Loc cb_savecurloc(CodeBuffer *cb) {
   Loc saved;
   saved.expr = cb->current_expr;
   saved.srcref = cb->current_srcref;
+  saved.is_null = false;
   return saved;
 }
 
@@ -1526,8 +1526,6 @@ SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt ) {
   if ( var_info.found ) {
     SEXP val = var_info.value;
     
-    // TODO base R functions seem to be lazyloaded
-    // as promises?
     if (TYPEOF(val) == PROMSXP) {
         
       int err = 0;
@@ -1679,7 +1677,7 @@ VarInfo find_cenv_var(SEXP var, CompilerEnv* cenv) {
 
   SEXP env = cenv->r_env;
   while (env != R_NilValue && env != R_EmptyEnv) {
-    SEXP val = Rf_findVarInFrame3(env, var, FALSE); // TODO why did TRUE not work
+    SEXP val = Rf_findVarInFrame3(env, var, FALSE);
     if (val != R_UnboundValue) {
       info.defining_frame = NULL;
       info.env = env;
@@ -2911,7 +2909,6 @@ SEXP gen_code( SEXP e, CompilerContext * cntxt, SEXP gen, Loc loc ) {
 
 SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
 
-  // TODO patch labels once inlining is real
   DEBUG_PRINT("++ code_buf_code: Generating final bytecode object\n");
   DEBUG_PRINT("   Code size: %d\n", cb->code_count);
   DEBUG_PRINT("   Constant pool size: %d\n", cb->const_count);
@@ -2919,23 +2916,6 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
   cb_patchlabels(cb);
 
   SEXP code_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1 ) );
-
-  if ( cb->srcref_tracking_on ) {
-
-    SEXP srcref_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1) );
-    int * srcref_ptr = INTEGER( srcref_vec );
-  
-    srcref_ptr[0] = NA_INTEGER; 
-
-    for (int i = 0; i < cb->code_count; i++)
-      srcref_ptr[i+1] = cb->srcref_buf[i];
-
-    setAttrib(srcref_vec, R_ClassSymbol, Rf_mkString("srcrefsIndex"));
-    PUTCONST( srcref_vec ); // Ensure srcref_buf is in constant pool
-
-    UNPROTECT(1); // srcref_vec
-
-  }
 
   if ( cb->expr_tracking_on ) {
 
@@ -2951,6 +2931,23 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
     PUTCONST( expr_vec ); // Ensure expr_buf is in constant pool
 
     UNPROTECT(1); // expr_vec
+
+  }
+
+  if ( cb->srcref_tracking_on ) {
+
+    SEXP srcref_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1) );
+    int * srcref_ptr = INTEGER( srcref_vec );
+  
+    srcref_ptr[0] = NA_INTEGER; 
+
+    for (int i = 0; i < cb->code_count; i++)
+      srcref_ptr[i+1] = cb->srcref_buf[i];
+
+    setAttrib(srcref_vec, R_ClassSymbol, Rf_mkString("srcrefsIndex"));
+    PUTCONST( srcref_vec ); // Ensure srcref_buf is in constant pool
+
+    UNPROTECT(1); // srcref_vec
 
   }
 
@@ -3206,8 +3203,8 @@ bool inline_left_brace( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   } else {
   
     Loc sloc = cb_savecurloc(cb);
-    SEXP bsrefs = Rf_getAttrib( e , install("srcref") );
 
+    SEXP bsrefs = getAttrib( e , install("srcref") );
     SEXP runner = CDR( e );
 
     if ( n > 2 ) {
@@ -4202,7 +4199,6 @@ FlattenedPlace flatten_place(SEXP place, CompilerContext *cntxt, Loc loc) {
   for (int i = 0; i < count; i++) {
     SET_VECTOR_ELT(origplaces, i, p);
 
-    //TODO comment on this
     SEXP new_args = PROTECT(Rf_allocList(1));
     SETCAR(new_args, tmp_name);
     SET_TAG(new_args, TAG(CDR(p)));
@@ -4262,8 +4258,6 @@ bool cmp_complex_assign(SEXP symbol, SEXP lhs, SEXP value, bool superAssign, Cod
   
   int n_places = length(flat.places);
 
-  // TODO check if this is GC safe
-  // flatPlaceIdxs <- seq_along(flatPlace)[-1]
   for (int i = n_places - 1; i >= 1; i--) {
     cmp_getter_call(VECTOR_ELT(flat.places, i), 
                   VECTOR_ELT(flat.origplaces, i), 
