@@ -3,7 +3,26 @@
 # All paths relative to root, comparing crbcc
 # bytecode to GNU-R
 ###########################
-PACKAGES = c("base", "compiler", "tools", "stats", "utils")
+PACKAGES = c(
+  "base", "compiler", "graphics", "grDevices", "grid",
+  "methods", "parallel", "splines", "stats", "stats4", "tcltk",
+  "tools", "utils", "boot", "class", "cluster", "codetools",
+  "foreign", "KernSmooth", "lattice", "MASS", "Matrix", "mgcv",
+  "nlme", "nnet", "rpart", "spatial", "survival", "ggplot2"
+)
+
+# If TRUE, ignore PACKAGES and pull top N CRAN packages by downloads.
+DO_CRAN_COMPARE <- FALSE
+N_CRAN <- 50
+CRAN_WHEN <- "last-week"
+CRAN_FALLBACK_TO_STATIC <- FALSE
+
+# If TRUE (and DO_CRAN_COMPARE=TRUE), remove tested CRAN packages after run.
+# Base/recommended packages are never removed.
+REMOVE_PACKAGES_AFTER_TEST <- FALSE
+
+# If TRUE, install missing target packages before running checks.
+INSTALL_MISSING_PACKAGES <- FALSE
 
 # Print result reference and crbcc outputs
 # Outputs latest compiled without errors,
@@ -14,95 +33,107 @@ DUMP_BC_PATH <- "tests/bc"
 # Old performance benchmarks, use ./tests/perf.R
 # to measure performance
 BENCHMARK <- FALSE
-B_ITERS <- 10
+B_ITERS <- 1
 ###########################
+
+resolve_packages <- function() {
+  if (!isTRUE(DO_CRAN_COMPARE)) {
+    return(list(packages = PACKAGES, source = "static"))
+  }
+
+  if (requireNamespace("cranlogs", quietly = TRUE)) {
+    top <- cranlogs::cran_top_downloads(when = CRAN_WHEN, count = N_CRAN)
+    pkgs <- unique(top$package)
+    cat(sprintf("[INFO] Using cranlogs top %d packages (%s).\n", length(pkgs), CRAN_WHEN))
+    return(list(packages = pkgs, source = "cranlogs"))
+  }
+
+  if (!isTRUE(CRAN_FALLBACK_TO_STATIC)) {
+    stop("DO_CRAN_COMPARE=TRUE but neither 'cranlogs' nor 'pkgsearch' is installed. Install one of them or set CRAN_FALLBACK_TO_STATIC=TRUE.")
+  }
+
+  warning("DO_CRAN_COMPARE=TRUE but neither 'cranlogs' nor 'pkgsearch' is installed; falling back to PACKAGES.")
+  list(packages = PACKAGES, source = "static-fallback")
+}
+
+install_missing_packages <- function(pkgs) {
+  installed_before <- rownames(installed.packages())
+  missing <- setdiff(pkgs, installed_before)
+
+  if (length(missing) == 0) {
+    cat("[INFO] All target packages already installed.\n")
+    return(character(0))
+  }
+
+  if (!isTRUE(INSTALL_MISSING_PACKAGES)) {
+    cat(sprintf("[INFO] Missing packages (%d) will not be installed (INSTALL_MISSING_PACKAGES=FALSE).\n", length(missing)))
+    return(character(0))
+  }
+
+  cat(sprintf("[INFO] Installing %d missing package(s) before checks...\n", length(missing)))
+  for (pkg in missing) {
+    tryCatch({
+      utils::install.packages(pkg)
+      cat(sprintf("[INFO] Installed: %s\n", pkg))
+    }, error = function(e) {
+      cat(sprintf("[WARN] Failed to install %s: %s\n", pkg, conditionMessage(e)))
+    })
+  }
+
+  installed_after <- rownames(installed.packages())
+  newly_installed <- intersect(missing, installed_after)
+  cat(sprintf("[INFO] Newly installed this run: %d\n", length(newly_installed)))
+  newly_installed
+}
+
+remove_newly_installed_packages <- function(pkgs) {
+  if (!isTRUE(REMOVE_PACKAGES_AFTER_TEST)) {
+    return(invisible(NULL))
+  }
+
+  if (length(pkgs) == 0) {
+    cat("[INFO] No newly installed packages to remove.\n")
+    return(invisible(NULL))
+  }
+
+  installed_now <- rownames(installed.packages())
+  removable <- intersect(pkgs, installed_now)
+
+  if (length(removable) == 0) {
+    cat("[INFO] Newly installed packages are already absent; nothing to remove.\n")
+    return(invisible(NULL))
+  }
+
+  cat(sprintf("[CLEANUP] Removing %d newly installed package(s)...\n", length(removable)))
+  for (pkg in removable) {
+    tryCatch({
+      utils::remove.packages(pkg)
+      cat(sprintf("[CLEANUP] Removed: %s\n", pkg))
+    }, error = function(e) {
+      cat(sprintf("[CLEANUP] Failed to remove %s: %s\n", pkg, conditionMessage(e)))
+    })
+  }
+}
 
 
 compare_bytecode_strict <- function(bc1, bc2, path = "Root") {
   
-  # 1. Unpack closures to get to the raw bytecode
-  if (typeof(bc1) == "closure") bc1 <- .Internal(bodyCode(bc1))
-  if (typeof(bc2) == "closure") bc2 <- .Internal(bodyCode(bc2))
-  
-  if (typeof(bc1) != typeof(bc2)) {
-    message(sprintf("[%s] Type mismatch: %s vs %s", path, typeof(bc1), typeof(bc2)))
-    return(FALSE)
-  }
-  
-  if (typeof(bc1) != "bytecode") {
-    is_id <- identical(bc1, bc2)
-    if (!is_id) message(sprintf("[%s] Values are not identical", path))
-    return(is_id)
-  }
-  
-  # 2. Extract using .Internal(disassemble) to suppress print output
-  d1 <- .Internal(disassemble(bc1))
-  d2 <- .Internal(disassemble(bc2))
-  
-  # d[[1]] = version, d[[2]] = instruction vector, d[[3]] = constant pool
-  if (!identical(d1[[1]], d2[[1]])) {
-    message(sprintf("[%s] Mismatch in Bytecode Version", path))
-    return(FALSE)
-  }
-  
-  if (!identical(d1[[2]], d2[[2]])) {
-    message(sprintf("[%s] Mismatch in Instruction Vector", path))
-    # Optional: Find the exact instruction index
-    for (idx in seq_along(d1[[2]])) {
-      if (!identical(d1[[2]][[idx]], d2[[2]][[idx]])) {
-        message(sprintf("     -> First opcode/operand difference at instruction index %d", idx))
-        break
-      }
-    }
-    return(FALSE)
-  }
-  
-  cp1 <- d1[[3]]
-  cp2 <- d2[[3]]
-  
-  if (length(cp1) != length(cp2)) {
-    message(sprintf("[%s] Mismatch in Constant Pool length: %d vs %d", path, length(cp1), length(cp2)))
-    return(FALSE)
-  }
-  
-  # Helper to recursively check elements (like lists containing bytecode)
-  compare_elements <- function(v1, v2, current_path) {
-    if (typeof(v1) == "bytecode" && typeof(v2) == "bytecode") {
-      return(compare_bytecode_strict(v1, v2, current_path))
-    } else if (is.list(v1) && is.list(v2)) {
-      if (length(v1) != length(v2)) {
-        message(sprintf("[%s] List length mismatch: %d vs %d", current_path, length(v1), length(v2)))
-        return(FALSE)
-      }
-      for (j in seq_along(v1)) {
-        nested_path <- sprintf("%s -> List[%d]", current_path, j)
-        if (!compare_elements(v1[[j]], v2[[j]], nested_path)) return(FALSE)
-      }
-      return(TRUE)
-    } else {
-      if (!identical(v1, v2)) {
-        message(sprintf("[%s] Mismatch at constant value", current_path))
-        if (inherits(v1, "srcrefsIndex") || inherits(v1, "expressionsIndex")) {
-          message("     -> The mismatch is in the source/expression tracking vectors!")
-        }
-        return(FALSE)
-      }
-      return(TRUE)
-    }
-  }
-  
-  # 3. Recursively compare the constant pool
-  for (i in seq_along(cp1)) {
-    if (!compare_elements(cp1[[i]], cp2[[i]], sprintf("%s -> CP[%d]", path, i))) {
-      return(FALSE)
-    }
-  }
-  
-  return(TRUE)
+  identical(bc1, bc2,
+    num.eq          = FALSE,  # compare numerics bitwise
+    single.NA       = FALSE,  # treat each NA flavour as distinct bits
+    attrib.as.set   = FALSE,  # attribute order must match exactly
+    ignore.bytecode = FALSE,  # include compiled bytecode
+    ignore.environment = FALSE, # closure environments must match
+    ignore.srcref   = FALSE,  # include source references
+    extptr.as.ref   = TRUE    # external pointers compared by address
+  )
+
 }
 
 dump_all_bytecode <- function(bc, filename) {
+  
   # Open a file connection for writing
+  dir.create(dirname(filename), recursive = TRUE, showWarnings = FALSE)
   fc <- file(filename, open = "wt")
   
   # Ensure the file connection is closed when the function exits
@@ -131,11 +162,11 @@ dump_all_bytecode <- function(bc, filename) {
       for (i in seq_along(cp)) {
         item <- cp[[i]]
         
-        # Case A: Direct nested bytecode (e.g., Promises)
+        # Direct nested bytecode
         if (typeof(item) == "bytecode") {
           dump_recursive(item, sprintf("%s -> CP[%d]", path, i))
-        } 
-        # Case B: Bytecode inside a list (e.g., MAKECLOSURE arguments)
+        }
+        # Bytecode inside a list
         else if (is.list(item)) {
           for (j in seq_along(item)) {
             if (typeof(item[[j]]) == "bytecode") {
@@ -147,7 +178,6 @@ dump_all_bytecode <- function(bc, filename) {
     }
   }
   
-  # Start the recursive dump
   dump_recursive(bc, "Root")
 }
 
@@ -182,7 +212,6 @@ benchmark_compilers <- function(prog, iters = 10, dump_bytecode = TRUE, torture 
     dump_all_bytecode(res_compiler, paste0(DUMP_BC_PATH, "/reference.txt"))
     dump_all_bytecode(res_crbcc, paste0(DUMP_BC_PATH, "/crbcc.txt"))
     
-    message("Recursive bytecode successfully dumped to 'bytecode_reference.txt' and 'bytecode_crbcc.txt'")
   }
 
   # 4. Strict Bytecode Comparison (using the strict function from earlier)
@@ -197,6 +226,11 @@ benchmark_compilers <- function(prog, iters = 10, dump_bytecode = TRUE, torture 
 }
 
 test_package <- function(package, torture=FALSE) {
+
+  if (!requireNamespace(package, quietly = TRUE)) {
+    cat(sprintf("\n[SKIP] Package not available: %s\n", package))
+    return(invisible(NULL))
+  }
 
   ns <- getNamespace(package)
   symbols <- ls(ns, all.names=T)
@@ -256,9 +290,7 @@ test_package <- function(package, torture=FALSE) {
       cat(sprintf("Stopped at: %s\n", func_id))
       cat(sprintf("Error: %s\n", e$message))
       cat(sprintf("========================================\n\n"))
-      
-      print(uncompiled_funs[[i]])
-      
+           
       readLines(con = "stdin", n = 1)
       
       stop("Test suite halted due to fatal crash.")
@@ -275,7 +307,19 @@ test_package <- function(package, torture=FALSE) {
 
 }
 
-for (i in PACKAGES) {
-  cat(sprintf("\n[START] Compiling package: %s ", i))
-  test_package(i)
+run_compare <- function() {
+  resolved <- resolve_packages()
+  packages_to_test <- resolved$packages
+  source <- resolved$source
+  cat(sprintf("[INFO] Package source: %s\n", source))
+
+  newly_installed <- install_missing_packages(packages_to_test)
+  on.exit(remove_newly_installed_packages(newly_installed), add = TRUE)
+
+  for (i in packages_to_test) {
+    cat(sprintf("\n[START] Compiling package: %s ", i))
+    test_package(i)
+  }
 }
+
+run_compare()

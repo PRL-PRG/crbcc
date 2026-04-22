@@ -5,12 +5,12 @@
 # FOR GENERATING RAW PROFILING DATA (CSV FILES)
 PROFILE <- TRUE
 OPTIMIZE <- 2
-ITERS_PER_FN <- 10
-PACKAGES_TO_TEST <- c("base", "compiler", "tools", "stats", "utils")
+ITERS_PER_FN <- 2
+PACKAGES_TO_TEST <- c("compiler")
 OUTPUT_DIR <- "test_results/benchmark_data"
 
 # FOR INTERPRETING DATA
-INTERPRET <- TRUE
+INTERPRET <- FALSE
 INTERPRET_SOURCE <- OUTPUT_DIR
 INTERPRET_OUTPUT <- "test_results/results"
 ##########################################

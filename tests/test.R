@@ -32,4 +32,5 @@ print_system_info <- function() {
 print_system_info()
 
 source("tests/compare.R")
+source("tests/exceptions.R")
 source("tests/perf.R")
