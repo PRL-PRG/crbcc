@@ -1,7 +1,6 @@
 #pragma region Headers
 
 #include <R.h>
-#include <Rdefines.h>
 #include <R_ext/Rdynload.h>
 #include <Rinternals.h>
 #include <ctype.h>
@@ -32,8 +31,9 @@ static int BCVersion;
 
 #define PUTCONST(const) cb_putconst(cb, const, true)
 #define PUTCONST_NODEDUP(const) cb_putconst(cb, const, false)
-#define PUTCODES(...) cb_putcode(cb, __VA_ARGS__, END_OPCODES)
-#define PUTCODE(code) cb_putcode(cb, code, END_OPCODES)
+#define L(x) (-(x + 1)) // When inserting an unresolved label into instr. pool
+#define PUTCODE(...) cb_putcode(cb, __VA_ARGS__, END_OPCODES)
+#define PUTLABEL(x) cb_putlabel(cb, x)
 
 #pragma endregion
 
@@ -203,25 +203,16 @@ typedef struct CompilerContext {
 
 } CompilerContext;
 
-typedef enum {
+typedef struct NamesList {        // List of discovered variable names
 
-  FRAME_LOCAL,
-  FRAME_NAMESPACE,
-  FRAME_GLOBAL
-
-} FrameType;
-
-typedef struct ExtraVars {
-
-  const char ** vars;
+  const char ** vars;             // List of strings, the actual names
   int count;
 
-} ExtraVars;
+} NamesList;
 
 typedef struct EnvFrame {
 
-  FrameType type;         
-  ExtraVars extra_vars;           // Vector of local variables discovered by the compiler
+  NamesList extra_vars;           // Vector of local variables discovered by the compiler
   struct EnvFrame *parent;        // Pointer to parent frame
 
 } EnvFrame;
@@ -297,12 +288,18 @@ typedef struct {
 
 } VarInfo;
 
-// in the original compiler loc = list(expr, srcref)
 typedef struct Loc {
   bool is_null;
   SEXP expr;
   SEXP srcref;
 } Loc;
+
+typedef struct Folded {
+
+  bool folded;
+  SEXP value;
+
+} Folded;
 
 typedef bool (*HandlerFn)(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
 typedef bool (*SetterHandlerFn)(SEXP afun, SEXP place, SEXP origplace, SEXP call, CodeBuffer *cb, CompilerContext *cntxt);
@@ -359,7 +356,6 @@ int cb_makelabel(CodeBuffer *cb);
 void cb_putlabel(CodeBuffer *cb, int label_id);
 void cb_patchlabels(CodeBuffer *cb);
 void ensure_label_capacity(LabelTable *lt, int needed_index);
-void cb_putcodelabel(CodeBuffer * cb, int label_id);
 
 // Code emission and constant pool management
 void cb_putcode(CodeBuffer *cb, ...);
@@ -383,8 +379,8 @@ CompilerContext *make_arg_ctx(CompilerContext *cntxt);
 CompilerContext *make_promise_ctx(CompilerContext *cntxt);
 
 // Environment manipulation
-void add_cenv_vars(CompilerEnv *cenv, ExtraVars vars);
-void add_cenv_frame(CompilerEnv *cenv, ExtraVars vars);
+void add_cenv_vars(CompilerEnv *cenv, NamesList vars);
+void add_cenv_frame(CompilerEnv *cenv, NamesList vars);
 
 // === Compilation functions ===
 void cmp(SEXP e, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok, bool setloc);
@@ -401,8 +397,8 @@ SEXP cmpfun(SEXP f, SEXP compiler_options);
 
 // Weird ahh functions
 bool find_var(SEXP var, CompilerContext *cntxt);
-ExtraVars find_locals(SEXP expr, ExtraVars known_locals, CompilerContext *cntxt);
-ExtraVars find_locals_list(SEXP elist, ExtraVars known_locals, CompilerContext *cntxt);
+NamesList find_locals(SEXP expr, NamesList known_locals, CompilerContext *cntxt);
+NamesList find_locals_list(SEXP elist, NamesList known_locals, CompilerContext *cntxt);
 SEXP gen_code(SEXP e, CompilerContext *cntxt, SEXP gen, Loc loc);
 const char * get_assigned_var( SEXP var, CompilerContext *cntxt );
 bool may_call_browser(SEXP expr, CompilerContext *cntxt);
@@ -419,8 +415,8 @@ bool any_dots( SEXP args );
 static bool is_base_var(SEXP sym, CompilerContext *cntxt);
 static SEXP R_bcVersion();
 static bool is_in_set(SEXP sym, SEXP set);
-static ExtraVars union_sets(ExtraVars a, ExtraVars b);
-SEXP constant_fold(SEXP e, CompilerContext* cntxt, Loc loc);
+static NamesList union_sets(NamesList a, NamesList b);
+Folded constant_fold(SEXP e, CompilerContext* cntxt, Loc loc);
 
 // Inlining
 bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
@@ -500,7 +496,6 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def);
 bool simple_formals(SEXP def);
 bool simple_args(SEXP icall, SEXP forms);
 bool is_simple_internal(SEXP def);
-SEXP simple_internals(SEXP pos);
 
 #pragma endregion
 
@@ -776,7 +771,7 @@ static void notify_no_switch_cases(CompilerContext *cntxt, Loc loc) {
   cntxt_warn("'switch' with no alternatives", cntxt, loc);
 }
 
-static void notify_assign_syntactic_fun(ExtraVars funs, CompilerContext *cntxt, Loc loc) {
+static void notify_assign_syntactic_fun(NamesList funs, CompilerContext *cntxt, Loc loc) {
   if (cntxt->options.suppress_all) return;
   if (funs.count <= 0) return;
 
@@ -881,25 +876,22 @@ static bool is_const_mode(SEXP e) {
 
 };
 
-SEXP check_const(SEXP e) {
+Folded check_const(SEXP e) {
 
   const int MAX_CONST_SIZE = 10;
 
   if ( is_const_mode(e) && Rf_length(e) <= MAX_CONST_SIZE ) {
 
-    SEXP res = PROTECT(Rf_allocVector( VECSXP, 1 ));
-    SET_VECTOR_ELT( res, 0, e );
-
-    UNPROTECT(1); // res
+    Folded res = { true, e };
     return res;
 
   }
 
-  return R_NilValue;
+  return (Folded){false, R_NilValue};
 
 };
 
-static SEXP constant_fold_sym(SEXP var, CompilerContext *cntxt) {
+static Folded constant_fold_sym(SEXP var, CompilerContext *cntxt) {
 
   if (is_in_c_set(CHAR(PRINTNAME(var)), const_names)) {
       DEBUG_PRINT("\t[@] Was in set\n");
@@ -912,7 +904,7 @@ static SEXP constant_fold_sym(SEXP var, CompilerContext *cntxt) {
       if (TYPEOF(val) == PROMSXP) {
         int err = 0;
         val = R_tryEval(var, R_BaseNamespace, &err);
-        if (err) return R_NilValue;
+        if (err) return (Folded){false, R_NilValue};
       }
 
       DEBUG_PRINT("\t[@] SYMBAHH\n");
@@ -923,7 +915,7 @@ static SEXP constant_fold_sym(SEXP var, CompilerContext *cntxt) {
 
   }
 
-  return R_NilValue;
+  return (Folded){false, R_NilValue};
 
 }
 
@@ -942,7 +934,7 @@ static SEXP get_fold_fun(SEXP var, CompilerContext *cntxt) {
 
 };
 
-static SEXP constant_fold_call(SEXP e, CompilerContext* cntxt) {
+static Folded constant_fold_call(SEXP e, CompilerContext* cntxt) {
 
   SEXP fun = CAR(e);
 
@@ -977,18 +969,16 @@ static SEXP constant_fold_call(SEXP e, CompilerContext* cntxt) {
         }
 
         Loc null_loc = {0};
-        SEXP val_wrapper = constant_fold(a, cntxt, null_loc);
+        Folded ce = constant_fold(a, cntxt, null_loc);
 
-        if (val_wrapper != R_NilValue) {
+        if (ce.folded) {
 
-          SEXP val = VECTOR_ELT(val_wrapper, 0);
-
-          if (!is_const_mode(val)) {
+          if (!is_const_mode(ce.value)) {
             ok = false;
             break;
           }
 
-          SET_VECTOR_ELT(folded_values, i, val);
+          SET_VECTOR_ELT(folded_values, i, ce.value);
           SET_VECTOR_ELT(arg_tags, i, tag);  // original name
 
         } else {
@@ -1025,20 +1015,20 @@ static SEXP constant_fold_call(SEXP e, CompilerContext* cntxt) {
 
         if (!error) {
           PROTECT(result);                                  // +1
-          SEXP out = check_const(result);                   // allocates
+          Folded out = check_const(result);                   // allocates
           UNPROTECT(5);  // result, new_call, arglist, folded_values, arg_tags
           return out;
         }
 
       UNPROTECT(4);    // new_call, arglist, folded_values, arg_tags
-      return R_NilValue;
+      return (Folded){false, R_NilValue};
     } else {
       UNPROTECT(2);    // folded_values, arg_tags
     }
   }
   }
 
-  return R_NilValue;
+  return (Folded){false, R_NilValue};
 
 }
 
@@ -1054,7 +1044,7 @@ static bool dots_or_missing(SEXP args) {
   return false;
 }
 
-SEXP constant_fold(SEXP e, CompilerContext* cntxt, Loc loc) {
+Folded constant_fold(SEXP e, CompilerContext* cntxt, Loc loc) {
   
   SEXPTYPE type = TYPEOF(e);
 
@@ -1066,10 +1056,10 @@ SEXP constant_fold(SEXP e, CompilerContext* cntxt, Loc loc) {
       return constant_fold_sym(e, cntxt);
 
     case PROMSXP:
-      return R_NilValue;
+      return (Folded){false, R_NilValue};;
 
     case BCODESXP:
-      return R_NilValue;
+      return (Folded){false, R_NilValue};;
 
     default:
       return check_const(e);
@@ -1085,7 +1075,7 @@ bool cmp_special(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   }
 
   int ci = PUTCONST( e );
-  PUTCODES( CALLSPECIAL_OP, ci );
+  PUTCODE( CALLSPECIAL_OP, ci );
 
   if (  cntxt->tailcall )
     PUTCODE( RETURN_OP );
@@ -1129,24 +1119,25 @@ void cmp_builtin_args(SEXP args, CodeBuffer *cb, CompilerContext *cntxt, bool mi
       if (TYPEOF(a) == SYMSXP) {
 
         Loc loc = cb_savecurloc(cb);
-        SEXP ca = constant_fold(a, cntxt, loc);
+        Folded ca = constant_fold(a, cntxt, loc);
 
-        if (ca == R_NilValue) {
+        if (! ca.folded) {
           cmp_sym(a, cb, ncntxt, missingOK);
           PUTCODE( PUSHARG_OP );
         } else {
-          SEXP ca_value = VECTOR_ELT(ca, 0); 
-          cmp_const_arg(ca_value, cb, cntxt);
+          PROTECT(ca.value);
+          cmp_const_arg(ca.value, cb, cntxt);
+          UNPROTECT(1); // ca.value
         }
       
-        } else if (TYPEOF(a) == LANGSXP) {
+      } else if (TYPEOF(a) == LANGSXP) {
         
-          cmp(a, cb, ncntxt, false, true);        
-          PUTCODE( PUSHARG_OP );
-        
-        } else {
-          cmp_const_arg(a, cb, cntxt);
-        }
+        cmp(a, cb, ncntxt, false, true);        
+        PUTCODE( PUSHARG_OP );
+      
+      } else {
+        cmp_const_arg(a, cb, cntxt);
+      }
 
       cmp_tag(n, cb);
     }
@@ -1179,7 +1170,7 @@ bool cmp_builtin( SEXP e, CodeBuffer *cb, CompilerContext *cntxt, bool internal 
     cmp_builtin_args( args, cb, cntxt, false );
     ci = PUTCONST( e );
 
-    PUTCODES( CALLBUILTIN_OP, ci );
+    PUTCODE( CALLBUILTIN_OP, ci );
 
     if ( cntxt->tailcall )
       PUTCODE( RETURN_OP );
@@ -1217,8 +1208,8 @@ InlineInfo get_inline_info(const char *name, CompilerContext* cntxt, bool guard_
 
   if (!info.found || info.env == NULL)
     return ret;
-
-  if (info.defining_frame != NULL && info.defining_frame->type == FRAME_LOCAL)
+   
+  if (info.defining_frame != NULL)
     return ret;
 
   SEXP from = info.env;
@@ -1302,13 +1293,12 @@ bool try_inline(SEXP e, CodeBuffer* cb, CompilerContext* cntxt) {
     int expridx = PUTCONST(e);
     int endlabel = cb_makelabel(cb);
 
-    PUTCODES(BASEGUARD_OP, expridx);
-    cb_putcodelabel(cb, endlabel);
+    PUTCODE(BASEGUARD_OP, expridx, L(endlabel));
 
     if (!handler(e, cb, cntxt))
       cmp_call(e, cb, cntxt, false);
 
-    cb_putlabel(cb, endlabel);
+    PUTLABEL( endlabel);
 
     if (tailpos) {
       PUTCODE(RETURN_OP);
@@ -1347,9 +1337,9 @@ void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, 
 
 }
 
-void ensure_label_capacity(LabelTable *lt, int needes_index) {
+void ensure_label_capacity(LabelTable *lt, int needed_index) {
 
-  if ( needes_index < lt->capacity ) {
+  if ( needed_index < lt->capacity ) {
     return; // Enough capacity
   }
 
@@ -1358,7 +1348,7 @@ void ensure_label_capacity(LabelTable *lt, int needes_index) {
 
   int new_cap = old_cap == 0 ? 16 : old_cap * 2;
 
-  while ( needes_index >= new_cap ) {
+  while ( needed_index >= new_cap ) {
     new_cap *= 2;
   }
 
@@ -1384,11 +1374,6 @@ void cb_putlabel(CodeBuffer * cb, int label_id) {
 
   cb->label_table.table[needed_index] = (cb->code_count) + 1;
 
-}
-
-// Set up the jump source
-void cb_putcodelabel(CodeBuffer * cb, int label_id) {
-  PUTCODE(-(label_id + 1));
 }
 
 int cb_makelabel(CodeBuffer * cb) {
@@ -1642,10 +1627,12 @@ bool find_var( SEXP var, CompilerContext * cntxt ) {
 
 bool find_loc_var( SEXP var, CompilerContext * cntxt ) {
 
+  //Rprintf("FLV: %s\n", CHAR(PRINTNAME(var)));
+
   CompilerEnv * cenv = cntxt->env;
   VarInfo var_info = find_cenv_var( var, cenv );
 
-  if ( var_info.found && var_info.defining_frame != NULL && var_info.defining_frame->type == FRAME_LOCAL ) {
+  if ( var_info.found && var_info.defining_frame != NULL ) {
     DEBUG_PRINT("++ find_loc_var: Symbol '%s' found in LOCAL scope\n", CHAR(PRINTNAME(var)));
     return true;
   } else {
@@ -1739,7 +1726,7 @@ static bool is_in_set(SEXP sym, SEXP set) {
   return false;
 }
 
-static ExtraVars union_sets(ExtraVars a, ExtraVars b) {
+static NamesList union_sets(NamesList a, NamesList b) {
 
   if (a.count == 0) return b;
   if (b.count == 0) return a;
@@ -1771,7 +1758,7 @@ static ExtraVars union_sets(ExtraVars a, ExtraVars b) {
     }
   }
 
-  ExtraVars ret;
+  NamesList ret;
   ret.count = count;
   ret.vars = buffer;
 
@@ -1779,10 +1766,10 @@ static ExtraVars union_sets(ExtraVars a, ExtraVars b) {
 
 };
 
-ExtraVars find_locals_list( SEXP elist, ExtraVars known_locals, CompilerContext *cntxt ) {
+NamesList find_locals_list( SEXP elist, NamesList known_locals, CompilerContext *cntxt ) {
 
   // Initialize empty list of locals
-  ExtraVars found;
+  NamesList found;
   found.count = 0;
   found.vars = NULL;
 
@@ -1794,7 +1781,7 @@ ExtraVars find_locals_list( SEXP elist, ExtraVars known_locals, CompilerContext 
     SEXP expr = CAR( node );
 
     // Find locals in the expression
-    ExtraVars new_vars = find_locals( expr, known_locals, cntxt );
+    NamesList new_vars = find_locals( expr, known_locals, cntxt );
 
     if ( new_vars.count != 0 ) {
       if (found.count == 0)
@@ -1808,9 +1795,9 @@ ExtraVars find_locals_list( SEXP elist, ExtraVars known_locals, CompilerContext 
   return found;
 };
 
-ExtraVars find_locals( SEXP expr, ExtraVars known_locals, CompilerContext *cntxt ) {
+NamesList find_locals( SEXP expr, NamesList known_locals, CompilerContext *cntxt ) {
 
-  ExtraVars ret;
+  NamesList ret;
   ret.count = 0;
   ret.vars = NULL;
 
@@ -1838,7 +1825,7 @@ ExtraVars find_locals( SEXP expr, ExtraVars known_locals, CompilerContext *cntxt
     ret.vars[0] = var;
     
     // Recurse into RHS
-    ExtraVars rhs_locals = find_locals( CADDR( expr ), known_locals, cntxt );
+    NamesList rhs_locals = find_locals( CADDR( expr ), known_locals, cntxt );
 
     return union_sets( rhs_locals, ret );
 
@@ -1848,12 +1835,12 @@ ExtraVars find_locals( SEXP expr, ExtraVars known_locals, CompilerContext *cntxt
   if ( strcmp( fname, "for" ) == 0 ) {
 
     const char * loop_var_raw = CHAR( PRINTNAME( CADR( expr ) ) );
-    ExtraVars seq_locals = find_locals( CADDR( expr ), known_locals, cntxt );
-    ExtraVars body_locals = find_locals( CADDDR( expr ), known_locals, cntxt );
+    NamesList seq_locals = find_locals( CADDR( expr ), known_locals, cntxt );
+    NamesList body_locals = find_locals( CADDDR( expr ), known_locals, cntxt );
 
     const char ** loop_var_arr = (const char **) R_alloc(1, sizeof(const char *));
     loop_var_arr[0] = loop_var_raw;
-    ExtraVars loop_var = { loop_var_arr, 1 };
+    NamesList loop_var = { loop_var_arr, 1 };
 
     return union_sets( union_sets( seq_locals, loop_var ), body_locals );
   
@@ -1885,7 +1872,7 @@ ExtraVars find_locals( SEXP expr, ExtraVars known_locals, CompilerContext *cntxt
 
 };
 
-void add_cenv_vars( CompilerEnv * cenv, ExtraVars vars ) {
+void add_cenv_vars( CompilerEnv * cenv, NamesList vars ) {
 
   // Check if there is something to add
   if (vars.count == 0) return;
@@ -1900,21 +1887,20 @@ void add_cenv_vars( CompilerEnv * cenv, ExtraVars vars ) {
   }
   #endif
 
-  ExtraVars current_vars = cenv->top_frame->extra_vars;
-  ExtraVars combined_vars = union_sets( current_vars, vars );
+  NamesList current_vars = cenv->top_frame->extra_vars;
+  NamesList combined_vars = union_sets( current_vars, vars );
   
   cenv->top_frame->extra_vars = combined_vars;
   
 };
 
 
-void add_cenv_frame( CompilerEnv * cenv, ExtraVars vars ) {
+void add_cenv_frame( CompilerEnv * cenv, NamesList vars ) {
 
   EnvFrame * new_frame = (EnvFrame *) R_alloc (1, sizeof( EnvFrame ));
 
-  ExtraVars nil = {NULL,0};
+  NamesList nil = {NULL,0};
 
-  new_frame->type = FRAME_LOCAL; 
   new_frame->parent = cenv->top_frame;
   new_frame->extra_vars = nil; // Initialize to avoid garbage
 
@@ -1934,7 +1920,7 @@ CompilerEnv * make_cenv( SEXP env ) {
   // Allocate the topmost frame
   cenv->top_frame = (EnvFrame *) R_alloc (1, sizeof( EnvFrame ));
 
-  ExtraVars nil = {NULL,0};
+  NamesList nil = {NULL,0};
 
   cenv->top_frame->parent = NULL;
   cenv->top_frame->extra_vars = nil;
@@ -1943,14 +1929,14 @@ CompilerEnv * make_cenv( SEXP env ) {
 
 }
 
-ExtraVars extract_names( SEXP forms ) {
+NamesList extract_names( SEXP forms ) {
 
-  ExtraVars empty = { NULL, 0 };
+  NamesList empty = { NULL, 0 };
 
   if ( forms == R_NilValue || length(forms) == 0 )
     return empty;
 
-  ExtraVars vars = { (const char **) R_alloc( sizeof( const char * ), length( forms ) ), length( forms ) };
+  NamesList vars = { (const char **) R_alloc( sizeof( const char * ), length( forms ) ), length( forms ) };
 
   int count = 0;
   SEQ_ALONG( iter, forms ) {
@@ -1973,18 +1959,18 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
 
   add_cenv_frame( new_cenv, extract_names(forms) );
 
-  ExtraVars nullv = {NULL, 0};
-  ExtraVars locals = find_locals_list( forms, nullv, cntxt );
+  NamesList nullv = {NULL, 0};
+  NamesList locals = find_locals_list( forms, nullv, cntxt );
 
 
-  ExtraVars arg_names = extract_names(forms);
-  ExtraVars tmp = union_sets( locals, arg_names );
+  NamesList arg_names = extract_names(forms);
+  NamesList tmp = union_sets( locals, arg_names );
   locals = tmp;
 
   while ( true ) {
 
-    ExtraVars new_found = find_locals( body, locals, cntxt );
-    ExtraVars combined = union_sets( locals, new_found );
+    NamesList new_found = find_locals( body, locals, cntxt );
+    NamesList combined = union_sets( locals, new_found );
 
     if ( combined.count == locals.count )
       break;
@@ -2004,7 +1990,7 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
   }
 
   if (syntactic_count > 0) {
-    ExtraVars sf;
+    NamesList sf;
     sf.vars = syntactic;
     sf.count = syntactic_count;
     Loc nloc;
@@ -2289,7 +2275,7 @@ void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
     PUTCODE( LDFALSE_OP );
   else {
     int ci = PUTCONST( val ); 
-    PUTCODES( LDCONST_OP, ci );
+    PUTCODE( LDCONST_OP, ci );
   }
 
   if ( cntxt->tailcall )
@@ -2415,14 +2401,14 @@ void cmp_call_sym_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, Compiler
   const char* maybe_NSE_symbols[] = {"bquote", NULL}; // Null works as terminator
   
   int ci = PUTCONST( fun );
-  PUTCODES( GETFUN_OP, ci );
+  PUTCODE( GETFUN_OP, ci );
   
   bool nse = is_in_c_set( CHAR(PRINTNAME(fun)), maybe_NSE_symbols );
 
   cmp_call_args( args, cb, cntxt, nse );
 
   ci = PUTCONST( call );
-  PUTCODES( CALL_OP, ci );
+  PUTCODE( CALL_OP, ci );
 
   if ( cntxt->tailcall )
     PUTCODE( RETURN_OP );
@@ -2440,7 +2426,7 @@ void cmp_call_expr_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, Compile
 
   cmp_call_args( args, cb, cntxt, nse );
   int ci = PUTCONST( call );
-  PUTCODES( CALL_OP, ci );
+  PUTCODE( CALL_OP, ci );
 
   if ( cntxt->tailcall )
     PUTCODE( RETURN_OP );
@@ -2500,7 +2486,7 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
         UNPROTECT(1); //c
       }
       
-      PUTCODES( MAKEPROM_OP, ci );
+      PUTCODE( MAKEPROM_OP, ci );
     
     } else {
       cmp_const_arg( a, cb, pnctxt );
@@ -2527,7 +2513,7 @@ void cmp_tag( SEXP tag, CodeBuffer * cb ) {
       return;
 
   int ci = PUTCONST( tag );
-  PUTCODES( SETTAG_OP, ci );
+  PUTCODE( SETTAG_OP, ci );
 
 };
 
@@ -2536,14 +2522,14 @@ void cmp_const_arg( SEXP a, CodeBuffer * cb, CompilerContext * cntxt ) {
   DEBUG_PRINT("++ cmp_const_arg: Compiling constant argument\n");
 
   if ( isNull(a) )
-    PUTCODES( PUSHNULLARG_OP );
+    PUTCODE( PUSHNULLARG_OP );
   else if ( IDENTICAL(a, R_TrueValue) )
-    PUTCODES( PUSHTRUEARG_OP );
+    PUTCODE( PUSHTRUEARG_OP );
   else if ( IDENTICAL(a, R_FalseValue) )
-    PUTCODES( PUSHFALSEARG_OP );
+    PUTCODE( PUSHFALSEARG_OP );
   else {
     int ci = PUTCONST( a );
-    PUTCODES( PUSHCONSTARG_OP, ci );
+    PUTCODE( PUSHCONSTARG_OP, ci );
   }
   
 };
@@ -2627,8 +2613,8 @@ int cb_getcode( CodeBuffer * cb, int pos ) {
 
 
 int cb_putconst( CodeBuffer * cb, SEXP item, bool check_dedup ) {
-
-DEBUG_PRINT("++ putconst: Adding constant to pool\n");
+  
+  DEBUG_PRINT("++ putconst: Adding constant to pool\n");
 
   // Initialize constant pool if it doesn't exist
   if ( cb->constant_pool == R_NilValue ) {
@@ -2768,9 +2754,9 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
     cb_setcurexpr(cb, e);
   }
 
-  SEXP ce = constant_fold( e, cntxt, cb_savecurloc( cb ) );
+  Folded ce = constant_fold( e, cntxt, cb_savecurloc( cb ) );
   
-  if ( ce == R_NilValue ) {
+  if ( ! ce.folded ) {
 
     // Not foldable, generate code normally
     DEBUG_PRINT(".. cmp: Expression not folded\n");
@@ -2804,7 +2790,9 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
     }
 
   } else {
-    cmp_const( VECTOR_ELT(ce, 0), cb, cntxt );
+    PROTECT(ce.value);
+    cmp_const( ce.value, cb, cntxt );
+    UNPROTECT(1); //ce.value
   }
 
   // Restore previous location
@@ -3013,7 +3001,7 @@ SEXP compile( SEXP e, SEXP env, SEXP options, SEXP srcref ) {
   CompilerEnv * cenv = make_cenv(env);
   CompilerContext * cntxt = make_toplevel_ctx( cenv, options );
   
-  ExtraVars empty = { NULL, 0 };
+  NamesList empty = { NULL, 0 };
   add_cenv_vars( cenv, find_locals( e, empty, cntxt ) );
 
   if ( may_call_browser( e, cntxt ) )
@@ -3266,7 +3254,7 @@ bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   SET_VECTOR_ELT( const_list, 2, sref );
 
   int ci = PUTCONST( const_list );
-  PUTCODES( MAKECLOSURE_OP, ci );
+  PUTCODE( MAKECLOSURE_OP, ci );
 
   if ( cntxt->tailcall )
     PUTCODE( RETURN_OP );
@@ -3294,7 +3282,7 @@ bool inline_left_parenthesis( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
     CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
     cmp( CADR( e ), cb, ncntxt, false, true );
 
-    PUTCODES( VISIBLE_OP, RETURN_OP );
+    PUTCODE( VISIBLE_OP, RETURN_OP );
     return true;
   
   }
@@ -3345,15 +3333,15 @@ bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
     eelse = CADDDR( e );
   }
 
-  SEXP ct = constant_fold( test, cntxt, cb_savecurloc( cb ) );
+  Folded ct = constant_fold( test, cntxt, cb_savecurloc( cb ) );
 
-  if ( ! Rf_isNull(ct) ) {
+  if ( ct.folded ) {
 
-    SEXP value = VECTOR_ELT( ct, 0 );
+    PROTECT(ct.value);
 
-    if (Rf_isLogical( value ) && length( value ) == 1) {
+    if (Rf_isLogical( ct.value ) && length( ct.value ) == 1) {
 
-      int v = LOGICAL_ELT(value, 0);
+      int v = LOGICAL_ELT(ct.value, 0);
 
       if ( v == TRUE ) {
 
@@ -3365,7 +3353,7 @@ bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
         if ( has_else )
           cmp( eelse, cb, cntxt, false, true );
         else if (cntxt->tailcall)
-          PUTCODES( LDNULL_OP, INVISIBLE_OP, RETURN_OP );
+          PUTCODE( LDNULL_OP, INVISIBLE_OP, RETURN_OP );
         else
           PUTCODE( LDNULL_OP);
 
@@ -3385,8 +3373,7 @@ bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   int callidx = PUTCONST( e );
   int else_label = cb_makelabel( cb );
 
-  PUTCODES( BRIFNOT_OP, callidx );
-  cb_putcodelabel(cb, else_label);
+  PUTCODE( BRIFNOT_OP, callidx, L(else_label) );
 
   cmp( then, cb, cntxt, false, true );
 
@@ -3397,15 +3384,14 @@ bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
     if ( has_else )
       cmp( eelse, cb, cntxt, false, true);
     else {
-      PUTCODES( LDNULL_OP, INVISIBLE_OP, RETURN_OP );
+      PUTCODE( LDNULL_OP, INVISIBLE_OP, RETURN_OP );
     }
 
   } else {
 
     int end_label = cb_makelabel(cb);
-    PUTCODE( GOTO_OP );
-    cb_putcodelabel( cb, end_label );
-    cb_putlabel(cb, else_label);
+    PUTCODE( GOTO_OP, L(end_label) );
+    PUTLABEL( else_label);
 
     if ( has_else )
       cmp( eelse, cb, cntxt, false, true);
@@ -3428,13 +3414,12 @@ bool inline_and( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   cmp(CADR(e), cb, ncntxt, false, true);
 
-  PUTCODES( AND1ST_OP, callidx );
-  cb_putcodelabel(cb, label);
+  PUTCODE( AND1ST_OP, callidx, L(label) );
 
   cmp(CADDR(e), cb, ncntxt, false, true);
 
-  PUTCODES( AND2ND_OP, callidx );
-  cb_putlabel(cb, label);
+  PUTCODE( AND2ND_OP, callidx );
+  PUTLABEL( label);
 
   if (cntxt->tailcall)
     PUTCODE( RETURN_OP);
@@ -3451,13 +3436,12 @@ bool inline_or( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   cmp(CADR(e), cb, ncntxt, false, true);
 
-  PUTCODES( OR1ST_OP, callidx );
-  cb_putcodelabel(cb, label);
+  PUTCODE( OR1ST_OP, callidx, L(label) );
 
   cmp(CADDR(e), cb, ncntxt, false, true);
 
-  PUTCODES( OR2ND_OP, callidx );
-  cb_putlabel(cb, label);
+  PUTCODE( OR2ND_OP, callidx );
+  PUTLABEL( label);
 
   if (cntxt->tailcall)
     PUTCODE( RETURN_OP );
@@ -3537,14 +3521,13 @@ void cmp_repeat_body(SEXP body, CodeBuffer *cb, CompilerContext *cntxt) {
   int loop_label = cb_makelabel(cb);
   int end_label = cb_makelabel(cb);
 
-  cb_putlabel(cb, loop_label);
+  PUTLABEL( loop_label);
 
   CompilerContext * lcntxt = make_loop_ctx(cntxt, loop_label, end_label);
 
   cmp(body, cb, lcntxt, false, true);
-  PUTCODES( POP_OP, GOTO_OP );
-  cb_putcodelabel(cb, loop_label);
-  cb_putlabel(cb, end_label);
+  PUTCODE( POP_OP, GOTO_OP, L(loop_label) );
+  PUTLABEL( end_label);
 
 }
 
@@ -3563,20 +3546,19 @@ bool inline_repeat(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     
     int ljmpend_label = cb_makelabel(cb);
 
-    PUTCODES( STARTLOOPCNTXT_OP, 0 );
-    cb_putcodelabel(cb, ljmpend_label);
+    PUTCODE( STARTLOOPCNTXT_OP, 0, L(ljmpend_label) );
 
     cmp_repeat_body(body, cb, cntxt);
 
-    cb_putlabel(cb, ljmpend_label);
-    PUTCODES( ENDLOOPCNTXT_OP, 0 );
+    PUTLABEL( ljmpend_label);
+    PUTCODE( ENDLOOPCNTXT_OP, 0 );
   
   }
 
   PUTCODE(LDNULL_OP);
 
   if (cntxt->tailcall)
-    PUTCODES( INVISIBLE_OP, RETURN_OP );
+    PUTCODE( INVISIBLE_OP, RETURN_OP );
 
   return true;
 }
@@ -3585,14 +3567,12 @@ bool inline_break(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   if (cntxt->loop.null) {
     
-    Loc loc = cb_savecurloc(cb);
     notify_wrong_break_next(CAR(e), cntxt, cb_savecurloc(cb));
     return cmp_special(e, cb, cntxt);
 
   } else if (cntxt->loop.goto_ok) {
 
-    PUTCODE( GOTO_OP);
-    cb_putcodelabel(cb, cntxt->loop.end_label_id);
+    PUTCODE( GOTO_OP, L(cntxt->loop.end_label_id) );
     return true;
   
   }
@@ -3603,15 +3583,13 @@ bool inline_break(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 bool inline_next(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   if (cntxt->loop.null) {
-    Loc loc = cb_savecurloc(cb);
     notify_wrong_break_next(CAR(e), cntxt, cb_savecurloc(cb));
     cmp_special(e, cb, cntxt);
     return true;
   } 
 
   if (cntxt->loop.goto_ok) {
-    PUTCODE(GOTO_OP);
-    cb_putcodelabel(cb, cntxt->loop.loop_label_id);
+    PUTCODE(GOTO_OP, L(cntxt->loop.loop_label_id));
     return true;
   }
   
@@ -3634,16 +3612,14 @@ bool cmp_while_body( SEXP call, SEXP condition, SEXP body, CodeBuffer * cb, Comp
   int callidx = PUTCONST( call );
   
   // if condition evaluated to false jump to end 
-  PUTCODES( BRIFNOT_OP, callidx );
-  cb_putcodelabel(cb, end_label);
+  PUTCODE( BRIFNOT_OP, callidx, L(end_label) );
 
   // compiled body
   cmp( body, cb, lcntxt, false, true );
 
   // pop body result, go up the loop again
-  PUTCODES( POP_OP, GOTO_OP );
-  cb_putcodelabel(cb, loop_label);
-  cb_putlabel(cb, end_label);
+  PUTCODE( POP_OP, GOTO_OP, L(loop_label) );
+  PUTLABEL( end_label);
 
   return true;
 
@@ -3664,20 +3640,19 @@ bool inline_while(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     cntxt->need_return_jmp = true;
     int ljmpend = cb_makelabel( cb );
 
-    PUTCODES( STARTLOOPCNTXT_OP, 0 );
-    cb_putcodelabel( cb, ljmpend );
+    PUTCODE( STARTLOOPCNTXT_OP, 0, L(ljmpend));
 
     cmp_while_body( e, condition, body, cb, cntxt );
 
     cb_putlabel( cb, ljmpend );
 
-    PUTCODES(ENDLOOPCNTXT_OP, 0);
+    PUTCODE(ENDLOOPCNTXT_OP, 0);
   }
 
   PUTCODE( LDNULL_OP );
 
   if ( cntxt->tailcall )
-    PUTCODES( INVISIBLE_OP, RETURN_OP );
+    PUTCODE( INVISIBLE_OP, RETURN_OP );
 
   return true;
 
@@ -3691,25 +3666,22 @@ bool cmp_for_body( int callidx, SEXP body, int ci, CodeBuffer * cb, CompilerCont
 
   if ( ci < 0 ) {
   
-    PUTCODE(GOTO_OP);
-    cb_putcodelabel(cb, loop_label);
+    PUTCODE(GOTO_OP, L(loop_label));
   
   } else {
 
-    PUTCODES( STARTFOR_OP, callidx, ci );
-    cb_putcodelabel(cb, loop_label);
+    PUTCODE( STARTFOR_OP, callidx, ci, L(loop_label) );
 
   }
 
-  cb_putlabel(cb, body_label);
+  PUTLABEL( body_label);
 
   CompilerContext * lcntxt = make_loop_ctx( cntxt, loop_label, end_label );
   cmp( body, cb, lcntxt, false, true );
 
   PUTCODE(POP_OP);
   cb_putlabel( cb, loop_label );
-  PUTCODE(STEPFOR_OP);
-  cb_putcodelabel( cb, body_label );
+  PUTCODE(STEPFOR_OP, L(body_label));
   cb_putlabel( cb, end_label );
 
   return true;
@@ -3740,25 +3712,23 @@ bool inline_for(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     cntxt->need_return_jmp = true;
     int ctxt_label = cb_makelabel( cb );
     
-    PUTCODES( STARTFOR_OP, callidx, ci );
-    cb_putcodelabel( cb, ctxt_label);
+    PUTCODE( STARTFOR_OP, callidx, ci, L(ctxt_label) );
     cb_putlabel( cb, ctxt_label );
 
     int ljmpend_label = cb_makelabel( cb );
-    PUTCODES( STARTLOOPCNTXT_OP, 1 );
-    cb_putcodelabel( cb, ljmpend_label );
+    PUTCODE( STARTLOOPCNTXT_OP, 1, L(ljmpend_label) );
 
     cmp_for_body( -1, body, -1, cb, cntxt );
 
-    cb_putlabel(cb,ljmpend_label);
-    PUTCODES( ENDLOOPCNTXT_OP, 1 );
+    PUTLABEL(ljmpend_label);
+    PUTCODE( ENDLOOPCNTXT_OP, 1 );
 
   }
 
   PUTCODE(ENDFOR_OP);
 
   if ( cntxt->tailcall )
-    PUTCODES( INVISIBLE_OP, RETURN_OP );
+    PUTCODE( INVISIBLE_OP, RETURN_OP );
 
   return true;
 
@@ -3780,7 +3750,7 @@ bool cmp_prim_1( SEXP e, CodeBuffer * cb, int op, CompilerContext * cntxt ) {
   CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
   cmp( CADR(e), cb, ncntxt, false, true );
   int ci = PUTCONST( e );
-  PUTCODES( op, ci );
+  PUTCODE( op, ci );
 
   if ( cntxt->tailcall )
     PUTCODE( RETURN_OP );
@@ -3806,7 +3776,7 @@ bool cmp_prim_2( SEXP e, CodeBuffer * cb, int op, CompilerContext * cntxt ) {
   ncntxt = make_arg_ctx( cntxt );
   cmp( CADDR(e), cb, ncntxt, false, true );
   int ci = PUTCONST(e);
-  PUTCODES( op, ci );
+  PUTCODE( op, ci );
 
   if ( cntxt->tailcall )
     PUTCODE( RETURN_OP );
@@ -3862,11 +3832,11 @@ bool inline_log(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
     cmp( CADR(e), cb, ncntxt, false, true );
 
     if ( length(e) == 2 ) {
-      PUTCODES( LOG_OP, ci );
+      PUTCODE( LOG_OP, ci );
     } else {
       ncntxt = make_arg_ctx(cntxt);
       cmp(CADDR(e), cb, ncntxt, false, true);
-      PUTCODES( LOGBASE_OP, ci );
+      PUTCODE( LOGBASE_OP, ci );
     }
 
   }
@@ -3885,7 +3855,7 @@ bool cmp_math_1(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
   }
   if ( length(e) != 2 ) {
     notify_wrong_arg_count(CAR(e), cntxt, cb_savecurloc(cb));
-    cmp_builtin(e, cb, cntxt, false);
+    return cmp_builtin(e, cb, cntxt, false);
   }
 
   const char * name = CHAR( PRINTNAME( CAR(e) ) );
@@ -3908,7 +3878,7 @@ bool cmp_math_1(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
   CompilerContext * ncntxt = make_non_tail_call_ctx(cntxt);
   cmp( CADR(e), cb, ncntxt, false, true );
   int ci = PUTCONST(e);
-  PUTCODES( MATH1_OP, ci, idx );
+  PUTCODE( MATH1_OP, ci, idx );
 
   if ( cntxt->tailcall )
     PUTCODE(RETURN_OP);
@@ -4063,23 +4033,23 @@ void cmp_getter_call(SEXP place, SEXP origplace, CodeBuffer *cb, CompilerContext
     if (!try_getter_inline(place, cb, ncntxt)) {
 
       int ci = PUTCONST(fun);
-      PUTCODES( GETFUN_OP, ci, PUSHNULLARG_OP );
+      PUTCODE( GETFUN_OP, ci, PUSHNULLARG_OP );
       
       cmp_call_args(CDDR(place), cb, ncntxt, false);
       
       int cci = PUTCONST( place);
-      PUTCODES( GETTER_CALL_OP, cci, SWAP_OP );
+      PUTCODE( GETTER_CALL_OP, cci, SWAP_OP );
 
     }
   } 
   else {
 
     cmp(fun, cb, ncntxt, false, true);
-    PUTCODES( CHECKFUN_OP, PUSHNULLARG_OP );
+    PUTCODE( CHECKFUN_OP, PUSHNULLARG_OP );
     cmp_call_args(CDDR(place), cb, ncntxt, false);
 
     int cci = PUTCONST( place);
-    PUTCODES( GETTER_CALL_OP, cci, SWAP_OP );
+    PUTCODE( GETTER_CALL_OP, cci, SWAP_OP );
 
   }
   
@@ -4148,22 +4118,22 @@ void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, Com
     if (!try_setter_inline(afun, place, origplace, acall, cb, ncntxt)) {
 
       int ci = PUTCONST(afun);
-      PUTCODES(GETFUN_OP, ci, PUSHNULLARG_OP);
+      PUTCODE(GETFUN_OP, ci, PUSHNULLARG_OP);
 
       cmp_call_args(CDDR(place), cb, ncntxt, false);
       
       int cci = PUTCONST(acall);
       int cvi = PUTCONST(vexpr);
-      PUTCODES( SETTER_CALL_OP, cci, cvi );
+      PUTCODE( SETTER_CALL_OP, cci, cvi );
     }
   } else {
     cmp(afun, cb, ncntxt, false, true);
-    PUTCODES( CHECKFUN_OP, PUSHNULLARG_OP );
+    PUTCODE( CHECKFUN_OP, PUSHNULLARG_OP );
     cmp_call_args(CDDR(place), cb, ncntxt, false);
 
     int cci = PUTCONST(acall);
     int cvi = PUTCONST(vexpr);
-    PUTCODES( SETTER_CALL_OP, cci, cvi );
+    PUTCODE( SETTER_CALL_OP, cci, cvi );
 
   }
 
@@ -4248,7 +4218,7 @@ bool cmp_complex_assign(SEXP symbol, SEXP lhs, SEXP value, bool superAssign, Cod
 
   // Prepare constant for the symbol and emit start of assignment
   int csi = PUTCONST(symbol);
-  PUTCODES(start_op, csi);
+  PUTCODE(start_op, csi);
 
   // Prepare context for arguments/indices
   ncntxt = make_arg_ctx(cntxt);
@@ -4277,13 +4247,13 @@ bool cmp_complex_assign(SEXP symbol, SEXP lhs, SEXP value, bool superAssign, Cod
                   vtmp_name, cb, ncntxt);
   }
 
-  PUTCODES( end_op, csi );
+  PUTCODE( end_op, csi );
 
   if (!cntxt->toplevel)
     PUTCODE(DECLNKSTK_OP);
 
   if (cntxt->tailcall)
-    PUTCODES( INVISIBLE_OP, RETURN_OP );
+    PUTCODE( INVISIBLE_OP, RETURN_OP );
 
   UNPROTECT(2); // flat.origplaces, flat.places
   return true;
@@ -4340,7 +4310,7 @@ bool cmp_symbol_assign( SEXP symbol, SEXP value, bool super_assign, CodeBuffer *
   PUTCODE(ci);
 
   if (cntxt->tailcall)
-    PUTCODES(INVISIBLE_OP, RETURN_OP);
+    PUTCODE(INVISIBLE_OP, RETURN_OP);
 
   return true;
 
@@ -4397,7 +4367,7 @@ bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, C
     int ci = PUTCONST(call);
     int csi = PUTCONST(sym);
     
-    PUTCODES( DOLLARGETS_OP, ci, csi );    
+    PUTCODE( DOLLARGETS_OP, ci, csi );    
     return true;
 
   }
@@ -4422,7 +4392,7 @@ bool dollar_getter_inline_handler(SEXP call, CodeBuffer *cb, CompilerContext *cn
     int ci = PUTCONST(call);
     int csi = PUTCONST(sym);
 
-    PUTCODES( DUP2ND_OP, DOLLAR_OP, ci, csi, SWAP_OP );
+    PUTCODE( DUP2ND_OP, DOLLAR_OP, ci, csi, SWAP_OP );
     return true;
   }
 
@@ -4492,18 +4462,17 @@ bool cmp_subset_dispatch( int start_op, dlftop dlftop, SEXP e, CodeBuffer * cb, 
 
     cmp(oe, cb, ncntxt, false, true);
 
-    PUTCODES( start_op, ci );
-    cb_putcodelabel(cb, label);
+    PUTCODE( start_op, ci, L(label) );
 
     SEXP indices = CDDR(e);
     cmp_indices(indices, cb, ncntxt);
 
     if (dlftop.rank)
-      PUTCODES( dlftop.code, ci, length(indices) );
+      PUTCODE( dlftop.code, ci, length(indices) );
     else
-      PUTCODES( dlftop.code, ci );
+      PUTCODE( dlftop.code, ci );
 
-    cb_putlabel(cb, label);
+    PUTLABEL( label);
 
     if ( cntxt->tailcall )
       PUTCODE( RETURN_OP );
@@ -4536,14 +4505,13 @@ bool cmp_dispatch(int start_op, int dflt_op, SEXP e, CodeBuffer * cb, CompilerCo
       int ci = PUTCONST(e);
       int end_label = cb_makelabel(cb);
 
-      PUTCODES( start_op, ci );
-      cb_putcodelabel(cb, end_label);
+      PUTCODE( start_op, ci, L(end_label) );
 
       if ( ne > 2 )
         cmp_builtin_args(CDDR(e), cb, cntxt, missing_ok);
 
       PUTCODE(dflt_op);
-      cb_putlabel(cb, end_label);
+      PUTLABEL( end_label);
 
       if ( cntxt->tailcall )
         PUTCODE(RETURN_OP);
@@ -4565,15 +4533,14 @@ bool cmp_setter_dispatch(int start_op, int dflt_op, SEXP afun, SEXP place, SEXP 
     int ci = PUTCONST(call);
     int end_label = cb_makelabel(cb);
 
-    PUTCODES(start_op, ci);
-    cb_putcodelabel(cb,end_label);
+    PUTCODE(start_op, ci, L(end_label));
 
     if (length(place) > 2) {
       cmp_builtin_args(CDDR(place), cb, cntxt, true);
     }
 
     PUTCODE(dflt_op);
-    cb_putlabel(cb, end_label);
+    PUTLABEL( end_label);
     return true;
 
   }
@@ -4642,18 +4609,17 @@ bool cmp_subassign_dispatch(int start_op, dlftop dfltop, SEXP afun, SEXP place, 
     int ci = PUTCONST(call);
     int label = cb_makelabel(cb);
 
-    PUTCODES(start_op, ci);
-    cb_putcodelabel(cb,label);
+    PUTCODE(start_op, ci, L(label));
 
     SEXP indices = CDDR(place);
     cmp_indices(indices, cb, cntxt);
 
-    PUTCODES( dfltop.code, ci );
+    PUTCODE( dfltop.code, ci );
 
     if ( dfltop.rank )
       PUTCODE(length(indices));
 
-    cb_putlabel(cb,label);
+    PUTLABEL(label);
     return true;
     
   }
@@ -4725,15 +4691,14 @@ bool cmp_getter_dispatch(int start_op, int dflt_op, SEXP call, CodeBuffer * cb, 
     int ci = PUTCONST(call);
     int end_label = cb_makelabel(cb);
 
-    PUTCODES( DUP2ND_OP, start_op, ci );
-    cb_putcodelabel(cb, end_label);
+    PUTCODE( DUP2ND_OP, start_op, ci, L(end_label) );
 
     if (length(call) > 2) {
       cmp_builtin_args(CDDR(call), cb, cntxt, true);
     }
 
     PUTCODE(dflt_op);
-    cb_putlabel(cb, end_label);
+    PUTLABEL( end_label);
     PUTCODE(SWAP_OP);
 
     return true;
@@ -4753,19 +4718,18 @@ bool cmp_subset_getter_dispatch(int start_op, dlftop dfltop, SEXP call, CodeBuff
     int ci = PUTCONST(call);
     int end_label = cb_makelabel(cb);
 
-    PUTCODES( DUP2ND_OP, start_op, ci );
-    cb_putcodelabel(cb, end_label);
+    PUTCODE( DUP2ND_OP, start_op, ci, L(end_label) );
 
     SEXP indices = CDDR(call);
     cmp_indices(indices, cb, cntxt);
 
     if ( dfltop.rank ) {
-      PUTCODES( dfltop.code, ci, length(indices) );
+      PUTCODE( dfltop.code, ci, length(indices) );
     } else {
-      PUTCODES( dfltop.code, ci );
+      PUTCODE( dfltop.code, ci );
     }
 
-    cb_putlabel(cb, end_label);
+    PUTLABEL(end_label);
     PUTCODE(SWAP_OP);
     
     return true;
@@ -4854,8 +4818,11 @@ bool cmp_multi_colon(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 bool inline_with(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
+  bool suppress = cntxt->options.suppress_all_undef;
   cntxt->options.suppress_all_undef = true;
+
   cmp_call_sym_fun( CAR(e), CDR(e), e, cb, cntxt );
+  cntxt->options.suppress_all_undef = suppress;
   return true;
 
 };
@@ -4907,7 +4874,7 @@ bool inline_dollar(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     int ci = PUTCONST(e);
     int csi = PUTCONST(sym);
 
-    PUTCODES( DOLLAR_OP, ci, csi );
+    PUTCODE( DOLLAR_OP, ci, csi );
 
     if (cntxt->tailcall)
       PUTCODE(RETURN_OP);
@@ -5007,10 +4974,6 @@ bool simple_formals(SEXP def) {
     
     if (TAG(node) == R_DotsSymbol)
       return false;
-  
-  }
-
-  SEQ_ALONG( node, forms ) {
 
     SEXP d = CAR(node);
 
@@ -5032,12 +4995,11 @@ bool is_simple_internal(SEXP def) {
     
     SEXP b = BODY(def);
     
-    // since R 3.5.0 packages are precompiled
     if (TYPEOF(b) == BCODESXP) {
       b = R_BytecodeExpr(b);
     }
     
-    if (TYPEOF(b) == LANGSXP && length(b) == 2 && CAR(b) == install("{")) {
+    if (TYPEOF(b) == LANGSXP && length(b) == 2 && CAR(b) == R_BraceSymbol) {
       b = CADR(b);
     }
     
@@ -5104,56 +5066,6 @@ bool simple_args(SEXP icall, SEXP forms) {
   return true;
 }
 
-
-SEXP simple_internals(SEXP pos) {
-  
-  // names <- ls(pos = pos, all.names = TRUE)
-  SEXP ls_sym = install("ls");
-  SEXP all_names_sym = install("all.names");
-  
-  SEXP ls_call = PROTECT(Rf_lang3(ls_sym, pos, R_TrueValue));
-  SET_TAG(CDDR(ls_call), all_names_sym);
-  
-  SEXP names_vec = PROTECT(Rf_eval(ls_call, R_GlobalEnv));
-  
-  if (TYPEOF(names_vec) != STRSXP || length(names_vec) == 0) {
-    UNPROTECT(2); // ls_call, names_vec
-    return Rf_allocVector(STRSXP, 0);
-  }
-
-  SEXP as_env_sym = install("as.environment");
-  SEXP env_call = PROTECT(Rf_lang2(as_env_sym, pos));
-  SEXP target_env = PROTECT(Rf_eval(env_call, R_GlobalEnv));
-  
-  int n = length(names_vec);
-  int match_count = 0;
-  
-  // Temporary array to flag which names are simple internals
-  int *keep = (int*)R_alloc(n, sizeof(int));
-  
-  for (int i = 0; i < n; i++) {
-    SEXP sym = installChar(STRING_ELT(names_vec, i));
-    SEXP def = Rf_findVarInFrame(target_env, sym);
-    
-    if (def != R_UnboundValue && is_simple_internal(def)) {
-      keep[i] = 1;
-      match_count++;
-    } else {
-      keep[i] = 0;
-    }
-  }
-  
-  SEXP res = PROTECT(Rf_allocVector(STRSXP, match_count));
-  int idx = 0;
-  for (int i = 0; i < n; i++) {
-    if (keep[i]) {
-      SET_STRING_ELT(res, idx++, STRING_ELT(names_vec, i));
-    }
-  }
-  
-  UNPROTECT(5);
-  return res;
-};
 
 bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   
@@ -5307,7 +5219,7 @@ bool inline_c_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     }
 
     int ci = PUTCONST(e);
-    PUTCODES( DOTCALL_OP, ci, nargs );
+    PUTCODE( DOTCALL_OP, ci, nargs );
 
     if (cntxt->tailcall)
       PUTCODE(RETURN_OP);
@@ -5357,7 +5269,6 @@ bool preprocess_cases(SEXP cases, SwitchCase * processed, CodeBuffer * cb, bool 
   // set to it and the unresolved array is cleared.
   int n_unresolved = 0;
   SwitchCase ** unresolved = (SwitchCase**) R_alloc( length(cases), sizeof(SwitchCase*) );
-
 
   int idx = 0;
   for ( SEXP iter = cases; iter != R_NilValue; iter = CDR(iter) ) {
@@ -5529,7 +5440,7 @@ bool inline_switch(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     int int_count = 0;
     int * int_labels_c = resolve_num_labels(cases, processed_cases, miss_label, default_label, &int_count);
 
-    PUTCODES( SWITCH_OP, call_idx );
+    PUTCODE( SWITCH_OP, call_idx );
 
     int char_pos = -1;
 
@@ -5550,7 +5461,7 @@ bool inline_switch(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
     if ( any_miss ) {
 
-      cb_putlabel(cb, miss_label);
+      PUTLABEL( miss_label);
       SEXP inner = PROTECT(mkString("empty alternative in numeric switch"));
       SEXP stop_call = PROTECT(Rf_lang2(install("stop"), inner));
       cmp(stop_call, cb, cntxt, false, true); 
@@ -5558,32 +5469,30 @@ bool inline_switch(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     
     }
     
-    cb_putlabel(cb, default_label);
+    PUTLABEL( default_label);
     PUTCODE(LDNULL_OP);
 
     if (cntxt->tailcall) {
-      PUTCODES( INVISIBLE_OP, RETURN_OP );
+      PUTCODE( INVISIBLE_OP, RETURN_OP );
     } else {
-      PUTCODE( GOTO_OP );
-      cb_putcodelabel(cb, end_label); 
+      PUTCODE( GOTO_OP, L(end_label) );
     }
 
     for ( int i = 0; i < length(cases); i++ ) {
       if ( ! processed_cases[i].is_missing ) {
       
-        cb_putlabel(cb, processed_cases[i].label);
+        PUTLABEL( processed_cases[i].label);
         cmp( processed_cases[i].expr, cb, cntxt, false, true );
 
         if ( ! cntxt->tailcall ) {
-          PUTCODE(GOTO_OP);
-          cb_putcodelabel(cb, end_label);
+          PUTCODE(GOTO_OP, L(end_label));
         }
       
       }
     }
 
     if ( ! cntxt->tailcall )
-      cb_putlabel(cb, end_label);
+      PUTLABEL( end_label);
 
 
     return true;
