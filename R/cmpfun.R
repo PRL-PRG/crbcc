@@ -72,9 +72,7 @@ cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = 
     }
 
     cforms <- vector("list", nforms)
-
-    #TODO pass everything in
-    .Call(C_cmpfile)
+    cforms <- .Call(C_cmpfile, env, options, forms, nforms, cforms, srefs, verbose)
 
     cat(gettextf("saving to file \"%s\" ... ", outfile))
     .Internal(save.to.file(cforms, outfile, ascii, version))
@@ -86,3 +84,4 @@ cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = 
   invisible(NULL)
 
 } 
+
