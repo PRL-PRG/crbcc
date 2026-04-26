@@ -44,40 +44,44 @@ compile <- function(e, env = .GlobalEnv, options = NULL, srcref = NULL) {
   .Call(C_compile, e, env, options, srcref)
 }
 
-# Use GNU compiler::cmpfile pipeline while injecting crbcc::cmpfun.
-cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv,
-                    verbose = FALSE, options = NULL, version = NULL) {
-  if (!requireNamespace("compiler", quietly = TRUE)) {
-    stop("Package 'compiler' is required")
+# Boilerplate around .Call taken from the R compiler
+cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = FALSE, options = NULL, version = NULL) {
+  
+  if (missing(outfile)) {
+    basename <- sub("\\.[a-zA-Z0-9]$", "", infile)
+    outfile <- paste0(basename, ".Rc")
   }
 
-  compiler_ns <- asNamespace("compiler")
-  original_cmpfun <- get("cmpfun", envir = compiler_ns, inherits = FALSE)
+  if (infile == outfile)
+    stop("input and output file names are the same")
 
-  shim_cmpfun <- function(fun, options = NULL) {
-    if (is.null(options)) {
-      options <- list()
+  if (! is.environment(env) || ! identical(env, topenv(env)))
+    stop("’env’ must be a top level environment")
+
+  forms <- parse(infile)
+  nforms <- length(forms)
+  srefs <- attr(forms, "srcref")
+  if (nforms > 0) {
+
+    expr.needed <- 1000
+    expr.old <- getOption("expressions")
+
+    if (expr.old < expr.needed) {
+      options(expressions = expr.needed)
+      on.exit(options(expressions = expr.old))
     }
-    cmpfun(fun, options)
-  }
 
-  unlockBinding("cmpfun", compiler_ns)
-  assign("cmpfun", shim_cmpfun, envir = compiler_ns)
-  lockBinding("cmpfun", compiler_ns)
+    cforms <- vector("list", nforms)
+    cforms <- .Call(C_cmpfile, env, options, forms, nforms, cforms, srefs, verbose)
 
-  on.exit({
-    unlockBinding("cmpfun", compiler_ns)
-    assign("cmpfun", original_cmpfun, envir = compiler_ns)
-    lockBinding("cmpfun", compiler_ns)
-  }, add = TRUE)
+    cat(gettextf("saving to file \"%s\" ... ", outfile))
+    .Internal(save.to.file(cforms, outfile, ascii, version))
+    cat(gettext("done"), "\n", sep = "")
 
-  compiler::cmpfile(
-    infile = infile,
-    outfile = outfile,
-    ascii = ascii,
-    env = env,
-    verbose = verbose,
-    options = options,
-    version = version
-  )
-}
+  } else
+    warning("empty input file; no output written");
+
+  invisible(NULL)
+
+} 
+
