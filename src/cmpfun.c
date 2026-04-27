@@ -2869,7 +2869,7 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
 
       DEBUG_PRINT("<< cmpfun: Compilation finished, creating closure\n");
 
-      SEXP val = PROTECT( R_mkClosure(R_ClosureFormals(f), b, CLOENV(f)) );
+      SEXP val = PROTECT( R_mkClosure(R_ClosureFormals(f), b, R_ClosureEnv(f)) );
 
       SEXP attrs = PROTECT( Rf_getAttrib(f, R_NamesSymbol) );
       if (attrs != R_NilValue) {
@@ -4208,11 +4208,10 @@ FlattenedPlace flatten_place(SEXP place, CompilerContext *cntxt, Loc loc) {
     SET_TAG(new_args, TAG(CDR(p)));
     SETCDR(new_args, CDDR(p));
 
-    SEXP tplace = PROTECT(Rf_allocList(1));
+    SEXP tplace = PROTECT(Rf_allocLang(1));
     SETCAR(tplace, CAR(p)); 
     SET_TAG(tplace, TAG(p));
     SETCDR(tplace, new_args);   
-    SET_TYPEOF(tplace, LANGSXP);
 
     SET_VECTOR_ELT(places, i, tplace);
     UNPROTECT(2); // tplace, new_args
