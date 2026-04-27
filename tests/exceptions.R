@@ -1,4 +1,4 @@
-source("tests/synthetic/warnings-errors.R")
+source("synthetic/warnings-errors.R")
 
 capture_compile <- function(compile_fn, fn, options) {
   warns <- character(0)

@@ -32,6 +32,13 @@ is_closure <- function(x) {
   is.function(x) && !is.primitive(x) && typeof(x) == "closure"
 }
 
+#' Check if Object is Compiled
+#'
+#' Internal helper function to check if an object is compiled
+#'
+#' @param fun Closure to test
+#' @return Logical value indicating if x is a closure
+#' @keywords internal
 is_compiled <- function(fun) {
   if (!is_closure(fun)) {
     stop("Argument 'fun' must be a closure (user-defined function)")
@@ -40,11 +47,35 @@ is_compiled <- function(fun) {
 }
 
 
+#' Compile a Generic Language Object
+#'
+#' Compiles a generic R language object (such as an expression or function) to bytecode using the C-based compiler backend.
+#'
+#' @param e An R language object to compile (expression, function, etc.).
+#' @param env The environment in which to evaluate the object (default: .GlobalEnv).
+#' @param options A list of compilation options (default: NULL).
+#' @param srcref Optional source reference information (default: NULL).
+#'
+#' @return The compiled object, or invisible NULL if compilation is only for side effect.
+#' @export
 compile <- function(e, env = .GlobalEnv, options = NULL, srcref = NULL) {
   .Call(C_compile, e, env, options, srcref)
 }
 
-# Boilerplate around .Call taken from the R compiler
+#' Compile an R Source File
+#'
+#' Compiles all top-level expressions in an R source file to bytecode and saves the result to an output file.
+#'
+#' @param infile Path to the input R source file.
+#' @param outfile Path to the output file. If missing, defaults to the input file name with extension replaced by ".Rc".
+#' @param ascii Logical; whether to write an ASCII file.
+#' @param env The top-level environment in which to evaluate expressions (default: .GlobalEnv).
+#' @param verbose Logical; print compilation progress messages.
+#' @param options List of compilation options.
+#' @param version Optional file format version.
+#'
+#' @return Invisible NULL. Output is written to file as a side effect.
+#' @export
 cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = FALSE, options = NULL, version = NULL) {
   
   if (missing(outfile)) {
@@ -56,7 +87,7 @@ cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = 
     stop("input and output file names are the same")
 
   if (! is.environment(env) || ! identical(env, topenv(env)))
-    stop("’env’ must be a top level environment")
+    stop("'env' must be a top level environment")
 
   forms <- parse(infile)
   nforms <- length(forms)

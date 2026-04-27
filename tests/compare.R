@@ -11,6 +11,8 @@ PACKAGES = c(
   "nlme", "nnet", "rpart", "spatial", "survival", "ggplot2"
 )
 
+PACKAGES = c("base", "compiler", "graphics", "grid", "tools")
+
 # If TRUE, ignore PACKAGES and pull top N CRAN packages by downloads.
 DO_CRAN_COMPARE <- FALSE
 N_CRAN <- 50
