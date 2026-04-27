@@ -11,7 +11,6 @@ PACKAGES = c(
   "nlme", "nnet", "rpart", "spatial", "survival", "ggplot2"
 )
 
-PACKAGES = c("scales")
 # If TRUE, ignore PACKAGES and pull top N CRAN packages by downloads.
 DO_CRAN_COMPARE <- FALSE
 N_CRAN <- 50
@@ -28,7 +27,7 @@ INSTALL_MISSING_PACKAGES <- FALSE
 # Print result reference and crbcc outputs
 # Outputs latest compiled without errors,
 # on mismatch look at diff
-DUMP_BC <- TRUE
+DUMP_BC <- FALSE
 DUMP_BC_PATH <- "tests/bc"
 
 # Old performance benchmarks, use ./tests/perf.R

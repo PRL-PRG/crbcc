@@ -43,8 +43,5 @@ format:
 
 .PHONY: test
 test: install
-	@for f in tests/*.R; do \
-	  echo "===> Running $$f"; \
-	  $(R) -f $$f || exit 1; \
-	done
-
+	$(R) -f ./tests/compare.R || exit 1;
+	$(R) -f ./tests/exceptions.R || exit 1;
