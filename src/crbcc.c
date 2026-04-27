@@ -26,22 +26,12 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-//#define DEBUG
 #define OPTIMIZE_INCOMPATIBLE false
 #define END_OPCODES -1
 
-extern SEXP R_TrueValue;
-extern SEXP R_FalseValue;
-
+static SEXP R_TrueValue;
+static SEXP R_FalseValue;
 static int BCVersion;
-
-#ifdef DEBUG
-#define DEBUG_PRINT(...) Rprintf(__VA_ARGS__)
-#else
-#define DEBUG_PRINT(...) do {} while (0)
-#endif
-
-#define IDENTICAL(x,y) R_compute_identical(x, y, 0)
 
 #define SEQ_ALONG( iter_name, along_var ) for ( SEXP iter_name = along_var; iter_name != R_NilValue; iter_name = CDR(iter_name) )
 #define SEQ_ALONG_IX( iter_name, along_var, iter ) \
@@ -417,7 +407,7 @@ SEXP cmpfun(SEXP f, SEXP compiler_options);
 bool find_var(SEXP var, CompilerContext *cntxt);
 NamesList find_locals(SEXP expr, NamesList known_locals, CompilerContext *cntxt);
 NamesList find_locals_list(SEXP elist, NamesList known_locals, CompilerContext *cntxt);
-SEXP gen_code(SEXP e, CompilerContext *cntxt, SEXP gen, Loc loc);
+SEXP gen_code(SEXP e, CompilerContext *cntxt, Loc loc);
 const char * get_assigned_var( SEXP var, CompilerContext *cntxt );
 bool may_call_browser(SEXP expr, CompilerContext *cntxt);
 bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt);
@@ -914,20 +904,16 @@ Folded check_const(SEXP e) {
 static Folded constant_fold_sym(SEXP var, CompilerContext *cntxt) {
 
   if (is_in_c_set(CHAR(PRINTNAME(var)), const_names)) {
-      DEBUG_PRINT("\t[@] Was in set\n");
 
     if ( is_base_var(var, cntxt) ) {
-      DEBUG_PRINT("\t[@] Was based\n");
 
-      SEXP val = Rf_findVar(var, R_BaseNamespace);
+      SEXP val = R_getVar(var, R_BaseNamespace, FALSE);
 
       if (TYPEOF(val) == PROMSXP) {
         int err = 0;
         val = R_tryEval(var, R_BaseNamespace, &err);
         if (err) return (Folded){false, R_NilValue};
       }
-
-      DEBUG_PRINT("\t[@] SYMBAHH\n");
 
       return check_const(val);
   
@@ -943,7 +929,7 @@ static SEXP get_fold_fun(SEXP var, CompilerContext *cntxt) {
 
   if ( is_in_c_set( CHAR(PRINTNAME(var)), fold_funs ) && is_base_var( var, cntxt ) ) {
 
-    SEXP val = Rf_findVar( var, R_BaseNamespace );
+    SEXP val = R_getVar( var, R_BaseNamespace, FALSE );
 
     if ( Rf_isFunction(val) )
       return val;
@@ -1076,10 +1062,10 @@ Folded constant_fold(SEXP e, CompilerContext* cntxt, Loc loc) {
       return constant_fold_sym(e, cntxt);
 
     case PROMSXP:
-      return (Folded){false, R_NilValue};;
+      return (Folded){false, R_NilValue};
 
     case BCODESXP:
-      return (Folded){false, R_NilValue};;
+      return (Folded){false, R_NilValue};
 
     default:
       return check_const(e);
@@ -1303,8 +1289,6 @@ bool try_inline(SEXP e, CodeBuffer* cb, CompilerContext* cntxt) {
   HandlerFn handler = NULL;
 
   if (!get_inline_handler(name, info.in, cntxt, &handler)) return false;
-
-  DEBUG_PRINT(">> Inlining function '%s' \n");
 
   if (info.guard_needed) {
     bool tailpos = cntxt->tailcall;
@@ -1643,9 +1627,6 @@ bool find_var( SEXP var, CompilerContext * cntxt ) {
   CompilerEnv * cenv = cntxt->env;
   VarInfo var_info = find_cenv_var( var, cenv );
 
-  if (!var_info.found) {
-    DEBUG_PRINT("?? find_var: Symbol '%s' NOT found in scope\n", CHAR(PRINTNAME(var)));
-  }
   return var_info.found;
 
 }
@@ -1656,10 +1637,8 @@ bool find_loc_var( SEXP var, CompilerContext * cntxt ) {
   VarInfo var_info = find_cenv_var( var, cenv );
 
   if ( var_info.found && var_info.defining_frame != NULL ) {
-    DEBUG_PRINT("++ find_loc_var: Symbol '%s' found in LOCAL scope\n", CHAR(PRINTNAME(var)));
     return true;
   } else {
-    DEBUG_PRINT("?? find_loc_var: Symbol '%s' NOT found in LOCAL scope\n", CHAR(PRINTNAME(var)));
     return false;
   }
 
@@ -1900,16 +1879,6 @@ void add_cenv_vars( CompilerEnv * cenv, NamesList vars ) {
   // Check if there is something to add
   if (vars.count == 0) return;
 
-  #ifdef DEBUG
-  if (TYPEOF(vars) == STRSXP && Rf_length(vars) > 0) {
-      DEBUG_PRINT("vv add_cenv_vars: Adding locals to frame: ");
-      for(int i=0; i < Rf_length(vars); i++) {
-          DEBUG_PRINT("%s ", CHAR(STRING_ELT(vars, i)));
-      }
-      DEBUG_PRINT("\n");
-  }
-  #endif
-
   NamesList current_vars = cenv->top_frame->extra_vars;
   NamesList combined_vars = union_sets( current_vars, vars );
   
@@ -1933,7 +1902,6 @@ void add_cenv_frame( CompilerEnv * cenv, NamesList vars ) {
 
 };
 
-// @manual 5.1
 CompilerEnv * make_cenv( SEXP env ) {
 
   // Allocate the compilation environment entry point
@@ -1973,7 +1941,7 @@ NamesList extract_names( SEXP forms ) {
   return vars;
 
 }
-// @manual 5.2
+
 CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
 
   CompilerEnv *new_cenv = (CompilerEnv *) R_alloc (1, sizeof( CompilerEnv ));
@@ -2112,7 +2080,6 @@ CompilerOptions extract_options(SEXP optlist) {
   return ret;
 }
 
-// @manual 4.1
 CompilerContext * make_toplevel_ctx( CompilerEnv *cenv, SEXP options ) {
   
   CompilerContext *ctx = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
@@ -2130,7 +2097,6 @@ CompilerContext * make_toplevel_ctx( CompilerEnv *cenv, SEXP options ) {
 
 }
 
-// @manual 4.2
 CompilerContext * make_function_ctx( CompilerContext * cntxt, CompilerEnv * fenv, SEXP forms, SEXP body ) {
 
   CompilerEnv * env = fenv;
@@ -2140,7 +2106,6 @@ CompilerContext * make_function_ctx( CompilerContext * cntxt, CompilerEnv * fenv
   return ncntxt;
 };
 
-// @manual 4.2
 CompilerContext * make_call_ctx( CompilerContext * cntxt, SEXP call ) {
 
   CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
@@ -2153,7 +2118,6 @@ CompilerContext * make_call_ctx( CompilerContext * cntxt, SEXP call ) {
 
 };
 
-// manual 4.2
 CompilerContext * make_non_tail_call_ctx( CompilerContext * cntxt ) {
 
   CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
@@ -2165,7 +2129,6 @@ CompilerContext * make_non_tail_call_ctx( CompilerContext * cntxt ) {
   
 };
 
-// @manual 4.2
 CompilerContext * make_no_value_ctx( CompilerContext * cntxt ) {
 
   CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
@@ -2177,7 +2140,6 @@ CompilerContext * make_no_value_ctx( CompilerContext * cntxt ) {
   
 };
 
-// @manual 4.2
 CompilerContext * make_loop_ctx( CompilerContext * cntxt, int loop_label, int end_label ) {
 
   CompilerContext * ncntxt = make_no_value_ctx( cntxt );
@@ -2191,7 +2153,6 @@ CompilerContext * make_loop_ctx( CompilerContext * cntxt, int loop_label, int en
 
 };
 
-// @manual 4.2
 CompilerContext * make_arg_ctx( CompilerContext * cntxt ) {
 
   // Alloc new instance
@@ -2210,7 +2171,6 @@ CompilerContext * make_arg_ctx( CompilerContext * cntxt ) {
 
 };
 
-// @manual 4.2
 CompilerContext * make_promise_ctx( CompilerContext * cntxt ) {
 
   CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
@@ -2229,7 +2189,6 @@ CompilerContext * make_promise_ctx( CompilerContext * cntxt ) {
 
 };
 
-// @manual 3
 CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
 
   CodeBuffer * cb = (CodeBuffer *) R_alloc (1, sizeof( CodeBuffer ) );
@@ -2286,16 +2245,13 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
 
 };
 
-// @manual 2.4
 void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
 
-  DEBUG_PRINT("++ cmp_const: Compiling constant\n");
-
-  if ( IDENTICAL( val, R_NilValue ) )
+  if ( val == R_NilValue )
     PUTCODE( LDNULL_OP );
-  else if ( IDENTICAL( val, R_TrueValue ) )
+  else if ( R_compute_identical( val, R_TrueValue, 0 ) )
     PUTCODE( LDTRUE_OP );
-  else if ( IDENTICAL( val, R_FalseValue ) )
+  else if ( R_compute_identical( val, R_FalseValue, 0 ) )
     PUTCODE( LDFALSE_OP );
   else {
     int ci = PUTCONST( val ); 
@@ -2307,10 +2263,7 @@ void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
 
 };
 
-// @manual 2.5
 void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok ) {
-
-  DEBUG_PRINT("++ cmp_sym: Compiling symbol '%s'\n", CHAR(PRINTNAME(sym)));
 
   if ( sym == R_DotsSymbol ) {
     notify_wrong_dots_use( sym, cntxt, cb_savecurloc(cb) );
@@ -2357,11 +2310,8 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_o
 
 };
 
-// @manual 2.6
 void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_ok ) {
 
-  DEBUG_PRINT("++ cmp_call: Compiling function call\n");
-  
   Loc saved = cb_savecurloc( cb );
   cb_setcurexpr( cb, call );
 
@@ -2374,8 +2324,6 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
     if ( ! ( inline_ok && try_inline( call, cb, cntxt ) ) ) {
 
       // If not inlinable:
-      DEBUG_PRINT("++ cmp_call: Calling symbol function '%s'\n", CHAR(PRINTNAME(fun)));
-
       if ( find_loc_var(fun,cntxt) ) {
         notify_local_fun(fun, cntxt, cb_savecurloc(cb));
       } else {
@@ -2384,7 +2332,6 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
         if ( def == R_NilValue ) {
           notify_undef_fun(fun, cntxt, cb_savecurloc(cb));
         } else {
-          DEBUG_PRINT("++ cmp_call: Found function definition for symbol '%s'\n", CHAR(PRINTNAME(fun)));
           bool bad_call = false;
           check_call( def, call, &bad_call );
           if (bad_call) notify_bad_call(call, cntxt, cb_savecurloc(cb));
@@ -2397,8 +2344,6 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
     }
 
   } else {
-    
-    DEBUG_PRINT(".. cmp_call: Calling complex expression function\n");
     
     // Hack for handling break() and next() calls
     if ( TYPEOF( fun ) == LANGSXP && TYPEOF( CAR( fun )) == SYMSXP ) {
@@ -2417,10 +2362,7 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
 
 };
 
-// @manual 2.6
 void cmp_call_sym_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
-
-  DEBUG_PRINT("++ cmp_call_sym_fun: Compiling function call with symbol function '%s'\n", CHAR(PRINTNAME(fun)));
 
   const char* maybe_NSE_symbols[] = {"bquote", NULL}; // Null works as terminator
   
@@ -2441,8 +2383,6 @@ void cmp_call_sym_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, Compiler
 
 void cmp_call_expr_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
 
-  DEBUG_PRINT("++ cmp_call_expr_fun: Compiling function call with expression function\n");
-
   CompilerContext * ncntxt = make_non_tail_call_ctx( cntxt );
   cmp( fun, cb, ncntxt, false, true );
   PUTCODE( CHECKFUN_OP );
@@ -2458,8 +2398,6 @@ void cmp_call_expr_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, Compile
 };
 
 void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool nse ) {
-
-  DEBUG_PRINT("++ cmp_call_args: Compiling function call arguments\n");
 
   CompilerContext * pnctxt = make_promise_ctx( cntxt );
 
@@ -2505,7 +2443,7 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
       if ( nse )
         ci = PUTCONST( a );
       else {
-        SEXP c = PROTECT( gen_code( a, pnctxt, R_NilValue, cb_savecurloc( cb ) ) );
+        SEXP c = PROTECT( gen_code( a, pnctxt, cb_savecurloc( cb ) ) );
         ci = PUTCONST( c );
         UNPROTECT(1); //c
       }
@@ -2526,8 +2464,6 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
 
 void cmp_tag( SEXP tag, CodeBuffer * cb ) {
 
-  DEBUG_PRINT("++ cmp_tag: Compiling argument tag\n");
-
   if ( tag == R_NilValue || tag == R_MissingArg )
     return;
 
@@ -2543,13 +2479,11 @@ void cmp_tag( SEXP tag, CodeBuffer * cb ) {
 
 void cmp_const_arg( SEXP a, CodeBuffer * cb, CompilerContext * cntxt ) {
 
-  DEBUG_PRINT("++ cmp_const_arg: Compiling constant argument\n");
-
   if ( a == R_NilValue )
     PUTCODE( PUSHNULLARG_OP );
-  else if ( IDENTICAL(a, R_TrueValue) )
+  else if ( R_compute_identical( a, R_TrueValue, 0 ) )
     PUTCODE( PUSHTRUEARG_OP );
-  else if ( IDENTICAL(a, R_FalseValue) )
+  else if ( R_compute_identical( a, R_FalseValue, 0 ) )
     PUTCODE( PUSHFALSEARG_OP );
   else {
     int ci = PUTCONST( a );
@@ -2638,8 +2572,6 @@ int cb_getcode( CodeBuffer * cb, int pos ) {
 
 int cb_putconst( CodeBuffer * cb, SEXP item, bool check_dedup ) {
   
-  DEBUG_PRINT("++ putconst: Adding constant to pool\n");
-
   // Initialize constant pool if it doesn't exist
   if ( cb->constant_pool == R_NilValue ) {
     cb->const_capacity = 16;
@@ -2670,7 +2602,6 @@ int cb_putconst( CodeBuffer * cb, SEXP item, bool check_dedup ) {
       
       /* 16 - take closure environments into account  */
       if (R_compute_identical(item, compare, 16)) {
-        DEBUG_PRINT("++ putconst: Found existing constant in pool at index %d\n", j);
         
         // Found so return the existing index immediately,
         // Do not increment const_count
@@ -2723,7 +2654,6 @@ SEXP cb_getconst( CodeBuffer * cb, int idx ) {
 
 };
 
-// @manual 15.1
 bool may_call_browser( SEXP expr, CompilerContext * cntxt ) {
 
   if ( TYPEOF( expr ) == LANGSXP ) {
@@ -2768,7 +2698,6 @@ bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt) {
 
 };
 
-// @manual 2.3
 void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, bool setloc ) {
 
   Loc sloc;
@@ -2783,32 +2712,25 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
   if ( ! ce.folded ) {
 
     // Not foldable, generate code normally
-    DEBUG_PRINT(".. cmp: Expression not folded\n");
-
     SEXPTYPE type = TYPEOF( e );
     switch (type) {
       case LANGSXP:
-        DEBUG_PRINT(".. cmp: Compiling Call (LANGSXP)\n");
         cmp_call(e, cb, cntxt, true);
         break;
 
       case SYMSXP:
-        DEBUG_PRINT(".. cmp: Compiling Symbol (SYMSXP): %s\n", CHAR(PRINTNAME(e)));
         cmp_sym(e, cb, cntxt, missing_ok);
         break;
 
       case BCODESXP:
-        DEBUG_PRINT("!! cmp: Error - Literal Bytecode found\n");
         cntxt_stop("cannot compile byte code literals in code", cntxt, cb_savecurloc(cb));
         break;
 
       case PROMSXP:
-        DEBUG_PRINT("!! cmp: Error - Literal Promise found\n");
         cntxt_stop("cannot compile promise literals in code", cntxt, cb_savecurloc(cb));
         break;
 
       default:
-        DEBUG_PRINT(".. cmp: Compiling Constant (Type: %d)\n", type);
         cmp_const(e, cb, cntxt);
         break;
     }
@@ -2825,14 +2747,12 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
 
 };
 
-// @manual 15.1 
 SEXP cmpfun(SEXP f, SEXP compiler_options) {
 
   SEXPTYPE type = TYPEOF( f );
 
   switch (type) {
     case CLOSXP:
-      DEBUG_PRINT(">> cmpfun: Compiling CLOSXP (Function)\n");
 
       CompilerEnv* cenv = make_cenv(R_ClosureEnv(f));
       CompilerContext* cntxt = make_toplevel_ctx(cenv, compiler_options);
@@ -2841,7 +2761,6 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
           make_function_ctx(cntxt, fenv, R_ClosureFormals(f), R_ClosureBody(f));
 
       if (may_call_browser(R_ClosureBody(f), ncntxt)) {
-        DEBUG_PRINT("!! cmpfun: Function may call browser, skipping compilation\n");
         return f;
       }
 
@@ -2865,9 +2784,7 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
       } else
         loc.is_null = true;
 
-      SEXP b = PROTECT(gen_code(R_ClosureBody(f), ncntxt, R_NilValue, loc));
-
-      DEBUG_PRINT("<< cmpfun: Compilation finished, creating closure\n");
+      SEXP b = PROTECT(gen_code(R_ClosureBody(f), ncntxt, loc));
 
       SEXP val = PROTECT( R_mkClosure(R_ClosureFormals(f), b, R_ClosureEnv(f)) );
 
@@ -2883,47 +2800,37 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
       }
 
       UNPROTECT(3);  // b, val, attrs
-      DEBUG_PRINT("<< cmpfun done, returning\n");
       
       return val;
 
     case BUILTINSXP:
     case SPECIALSXP:
-      DEBUG_PRINT( ">> cmpfun: Primitive function (BUILTIN/SPECIAL), skipping\n");
       return f;
 
     default:
-      DEBUG_PRINT("!! cmpfun: Error - Argument is not a function type: %d\n", type);
       Rf_error("Argument must be a closure, builtin, or special function");
   }
 
 };
 
-// @manual 2.1
-// TODO what is gen for? Compiler reference says its used when inlining loops
-// but gen_code is not being called from anywhere in there? Maybe wrong?
-SEXP gen_code( SEXP e, CompilerContext * cntxt, SEXP gen, Loc loc ) {
+SEXP gen_code( SEXP e, CompilerContext * cntxt, Loc loc ) {
+
+  R_TrueValue = PROTECT( Rf_ScalarLogical(1) );
+  R_FalseValue = PROTECT( Rf_ScalarLogical(0) );
 
   CodeBuffer * cb = make_code_buffer(e, loc);
   PROTECT( cb->constant_pool_handle ); // Protect constant pool handle
 
-  if ( gen == R_NilValue )
-    cmp( e, cb, cntxt, false, false );
-  //else
-  //  gen(cb,cntxt) <- This will have to be a function pointer passed in gen TODO ?
+  cmp( e, cb, cntxt, false, false );
 
   SEXP result = PROTECT(code_buf_code(cb, cntxt));
   
-  UNPROTECT(2); // constant_pool_handle, result
+  UNPROTECT(4); // constant_pool_handle, result, R_TrueValue, R_FalseValue
   return result;
 
 }
 
 SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
-
-  DEBUG_PRINT("++ code_buf_code: Generating final bytecode object\n");
-  DEBUG_PRINT("   Code size: %d\n", cb->code_count);
-  DEBUG_PRINT("   Constant pool size: %d\n", cb->const_count);
 
   cb_patchlabels(cb);
 
@@ -2983,6 +2890,8 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
   }
 
   // .Internal(mkCode(code, consts))
+  // NOTE: Calling .Internal is not safe and subject to change, however I am currently not aware
+  // of any other way to create a bytecode object, maybe change type of a cons cell?
   SEXP mkCode_sym = Rf_install("mkCode");
   SEXP inner_call = PROTECT( Rf_lang3(mkCode_sym, code_vec, const_pool) );
     
@@ -3031,9 +2940,9 @@ SEXP compile( SEXP e, SEXP env, SEXP options, SEXP srcref ) {
   if ( may_call_browser( e, cntxt ) )
     return e;
   else if (srcref == R_NilValue)
-    return gen_code( e, cntxt, R_NilValue, loc );
+    return gen_code( e, cntxt, loc );
   else
-    return gen_code( e, cntxt, R_NilValue, loc );
+    return gen_code( e, cntxt, loc );
 
 }
 
@@ -3265,14 +3174,12 @@ bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   CompilerContext * ncntxt = make_function_ctx( cntxt, fenv, formals, body );
 
   if ( may_call_browser( body, ncntxt ) ) {
-    DEBUG_PRINT("!! inline_function_handler: Function may call browser, skipping inlining\n");
     return false;
   }
 
   Loc loc = cb_savecurloc( cb );
-  SEXP cbody = gen_code( body, ncntxt, R_NilValue, loc );
+  SEXP cbody = gen_code( body, ncntxt, loc );
   PROTECT( cbody );
-
 
   SEXP const_list = PROTECT( Rf_allocVector( VECSXP, 3 ) );
   SET_VECTOR_ELT( const_list, 0, formals );
@@ -3291,8 +3198,6 @@ bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 };
 
 bool inline_left_parenthesis( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
-
-  DEBUG_PRINT("[_] Inlining left parenthesis function");
 
   if ( any_dots(e) )
     return cmp_builtin( e, cb, cntxt, false );
@@ -3346,8 +3251,6 @@ bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 };
 
 bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
-
-  DEBUG_PRINT("[_] Inlining if statement");
 
   SEXP test = CADR( e );
   SEXP then = CADDR( e );
@@ -4382,8 +4285,6 @@ bool cmp_assign(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 }
 
 bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
-
-  DEBUG_PRINT("[_] Trying to inline $<-\n");
 
   if (any_dots(place) || Rf_length(place) != 3) {
     return false;
