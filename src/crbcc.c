@@ -1753,30 +1753,51 @@ static NamesList union_sets(NamesList a, NamesList b) {
 NamesList find_locals_list( SEXP elist, NamesList known_locals, CompilerContext *cntxt ) {
 
   // Initialize empty list of locals
-  NamesList found;
-  found.count = 0;
-  found.vars = NULL;
+  NamesList found = {NULL, 0};
 
-  // Iterate over expressions in the list
-  SEXP node = elist;
-  while ( node != R_NilValue ) {
-    
-    // Get the first element
-    SEXP expr = CAR( node );
+  if ( (TYPEOF(elist) == LANGSXP) || (TYPEOF(elist) == LISTSXP) ) {
+    // Iterate over expressions in the list - pairlist iteration
+    SEXP node = elist;
+    while ( node != R_NilValue ) {
+      
+      // Get the first element
+      SEXP expr = CAR( node );
 
-    // Find locals in the expression
-    NamesList new_vars = find_locals( expr, known_locals, cntxt );
+      // Find locals in the expression
+      NamesList new_vars = find_locals( expr, known_locals, cntxt );
 
-    if ( new_vars.count != 0 ) {
-      if (found.count == 0)
-          found = new_vars;
-      else
-        found = union_sets(found, new_vars);
+      if ( new_vars.count != 0 ) {
+        if (found.count == 0)
+            found = new_vars;
+        else
+          found = union_sets(found, new_vars);
+      }
+
+      node = CDR( node );
     }
 
-    node = CDR( node );
   }
+
+  if ( TYPEOF(elist) == EXPRSXP ) {
+
+    int len = Rf_length(elist);
+
+    for (int i = 0; i < len; i++) {
+      
+      SEXP item = VECTOR_ELT( elist, i );
+      NamesList new_vars = find_locals( item, known_locals, cntxt );
+
+      if ( new_vars.count != 0 ) {
+        if (found.count == 0)
+            found = new_vars;
+        else
+          found = union_sets(found, new_vars);
+      }
+    }
+  }
+
   return found;
+
 };
 
 NamesList find_locals( SEXP expr, NamesList known_locals, CompilerContext *cntxt ) {
@@ -2931,7 +2952,7 @@ SEXP compile( SEXP e, SEXP env, SEXP options, SEXP srcref ) {
 
 SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP srefs, SEXP verbose) {
   
-  SEXP ret_cforms = PROTECT(allocVector(VECSXP, INTEGER(nforms)[0]));
+  SEXP ret_cforms = PROTECT(Rf_allocVector(VECSXP, INTEGER(nforms)[0]));
 
   CompilerEnv* cenv = make_cenv(env);
   CompilerContext* cntxt = make_toplevel_ctx(cenv, options);
@@ -2944,7 +2965,7 @@ SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP 
 
     SEXP sref = R_NilValue;
 
-    if ( i < length(srefs) ) {
+    if ( i < Rf_length(srefs) ) {
       SEXP sref = VECTOR_ELT(srefs, i);
     }
       

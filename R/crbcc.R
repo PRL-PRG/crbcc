@@ -92,6 +92,11 @@ compile <- function(e, env = .GlobalEnv, options = NULL, srcref = NULL) {
 #' @export
 cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = FALSE, options = NULL, version = NULL) {
   
+  if (verbose) {
+    warning("verbose not yet implemented, defaulting to false")
+    verbose <- FALSE
+  }
+
   if (missing(outfile)) {
     basename <- sub("\\.[a-zA-Z0-9]$", "", infile)
     outfile <- paste0(basename, ".Rc")
