@@ -2966,7 +2966,7 @@ SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP 
     SEXP sref = R_NilValue;
 
     if ( i < Rf_length(srefs) ) {
-      SEXP sref = VECTOR_ELT(srefs, i);
+      sref = VECTOR_ELT(srefs, i);
     }
       
     //TODO verbose option
