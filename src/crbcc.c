@@ -2935,7 +2935,7 @@ SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP 
 
   CompilerEnv* cenv = make_cenv(env);
   CompilerContext* cntxt = make_toplevel_ctx(cenv, options);
-  ExtraVars empty = { NULL, 0 };
+  NamesList empty = { NULL, 0 };
   add_cenv_vars( cenv, find_locals_list( forms, empty, cntxt ) );
 
   for ( int i = 0; i < INTEGER(nforms)[0]; i++ ) {
@@ -2953,7 +2953,7 @@ SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP 
     Loc loc = { false, e, sref };
 
     if ( ! may_call_browser(e, cntxt) )
-      SET_VECTOR_ELT(ret_cforms, i, gen_code(e, cntxt, R_NilValue, loc));
+      SET_VECTOR_ELT(ret_cforms, i, gen_code(e, cntxt, loc));
     else
       SET_VECTOR_ELT(ret_cforms, i, VECTOR_ELT(cforms, i));
 
