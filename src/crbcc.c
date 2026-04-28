@@ -275,38 +275,39 @@ typedef struct CodeBuffer {
 typedef struct SwitchPatch {
 
   bool has_char_labels;
-  int char_code_offset;     // Where to patch the char INTSXP index
-  int n_char;               // Length of char labels array
-  int * char_labels;        // Array of label IDs (with default at the end)
+  int char_code_offset;            // Where to patch the char INTSXP index
+  int n_char;                      // Length of char labels array
+  int * char_labels;               // Array of label IDs (with default at the end)
 
   // Numeric Labels Data (Always used)
-  int num_code_offset;      // Where to patch the num INTSXP index
-  int n_num;                // Length of num labels array
-  int * num_labels;         // Array of label IDs (with default at the end)
+  int num_code_offset;             // Where to patch the num INTSXP index
+  int n_num;                       // Length of num labels array
+  int * num_labels;                // Array of label IDs (with default at the end)
 
   struct SwitchPatch * next;
 
 } SwitchPatch;
 
+// Information about a variable
 typedef struct VarInfo {
 
-  EnvFrame* defining_frame;
-  SEXP env;
-  SEXP value;
+  EnvFrame* defining_frame;        // The frame in which the variable is defined if local
+  SEXP env;                        // The env in which the variable is defined if not local
+  SEXP value;                      // The variable itself
   bool found;
 
 } VarInfo;
 
-typedef struct Loc {
-  bool is_null;
+typedef struct Loc {               // Location tracking utility
+  bool is_null;                    // expr & srcref are populated or not
   SEXP expr;
   SEXP srcref;
 } Loc;
 
-typedef struct Folded {
+typedef struct Folded {            // Constant folding result
 
-  bool folded;
-  SEXP value;
+  bool folded;                     // Folding success flag
+  SEXP value;                      // Result if fold successful
 
 } Folded;
 
@@ -372,8 +373,6 @@ int cb_putconst(CodeBuffer *cb, SEXP item, bool check_dedup);
 SEXP cb_getconst(CodeBuffer *cb, int idx);
 void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, int * char_labels, int char_count, int char_pos);
 
-// === CONTEXT AND ENVIRONMENT FUNCTIONS ===
-
 // Constructors for various compiler contexts etc
 CompilerEnv *make_cenv(SEXP env);
 CompilerEnv *make_fun_env(SEXP forms, SEXP body, CompilerContext *cntxt);
@@ -390,7 +389,7 @@ CompilerContext *make_promise_ctx(CompilerContext *cntxt);
 void add_cenv_vars(CompilerEnv *cenv, NamesList vars);
 void add_cenv_frame(CompilerEnv *cenv, NamesList vars);
 
-// === Compilation functions ===
+// Compilation functions
 void cmp(SEXP e, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok, bool setloc);
 void cmp_const(SEXP val, CodeBuffer *cb, CompilerContext *cntxt);
 void cmp_sym(SEXP sym, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok);
@@ -422,7 +421,6 @@ bool check_call( SEXP def, SEXP call, bool *should_warn);
 bool any_dots( SEXP args );
 static bool is_base_var(SEXP sym, CompilerContext *cntxt);
 static SEXP R_bcVersion();
-static bool is_in_set(SEXP sym, SEXP set);
 static NamesList union_sets(NamesList a, NamesList b);
 Folded constant_fold(SEXP e, CompilerContext* cntxt, Loc loc);
 
@@ -806,11 +804,6 @@ static void notify_assign_syntactic_fun(NamesList funs, CompilerContext *cntxt, 
   }
 
   cntxt_warn(msg, cntxt, loc);
-}
-
-static void notify_compiler_error(const char *msg) {
-  if (!msg) return;
-  Rprintf("Error: compilation failed - %s\n", msg);
 }
 
 static char *format_bad_assignment_msg(SEXP expr) {
@@ -1716,17 +1709,6 @@ const char * get_assigned_var( SEXP var, CompilerContext *cntxt ) {
   }
 
 };
-
-static bool is_in_set(SEXP sym, SEXP set) {
-  if (set == R_NilValue) return false;
-  const char *name = CHAR(PRINTNAME(sym));
-  
-  for (int i = 0; i < Rf_length(set); i++) {
-    const char *el = CHAR(STRING_ELT(set, i));
-    if (strcmp(name, el) == 0) return true;
-  }
-  return false;
-}
 
 static NamesList union_sets(NamesList a, NamesList b) {
 
@@ -2752,7 +2734,7 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
   SEXPTYPE type = TYPEOF( f );
 
   switch (type) {
-    case CLOSXP:
+    case CLOSXP: {
 
       CompilerEnv* cenv = make_cenv(R_ClosureEnv(f));
       CompilerContext* cntxt = make_toplevel_ctx(cenv, compiler_options);
@@ -2802,7 +2784,8 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
       UNPROTECT(3);  // b, val, attrs
       
       return val;
-
+    
+    }
     case BUILTINSXP:
     case SPECIALSXP:
       return f;
@@ -3811,7 +3794,6 @@ bool cmp_math_1(SEXP e, CodeBuffer * cb, CompilerContext * cntxt) {
     cntxt_stop("cannot compile this expression", cntxt, cb_savecurloc(cb));
   }
 
-  Loc loc = cb_savecurloc(cb);
   CompilerContext * ncntxt = make_non_tail_call_ctx(cntxt);
   cmp( CADR(e), cb, ncntxt, false, true );
   int ci = PUTCONST(e);
@@ -4032,9 +4014,6 @@ void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, Com
 
   SEXP acall_args = PROTECT(copy_spine_and_append_value(CDDR(place), vexpr));
 
-  SEXP inner = PROTECT(LCONS(tmp_name, acall_args));
-  SEXP outer = PROTECT(LCONS(afun, inner));
-
   SEXP another_inner = PROTECT(LCONS(tmp_name, acall_args));
   SEXP acall = PROTECT(LCONS(afun, another_inner));
 
@@ -4075,7 +4054,7 @@ void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, Com
   }
 
   cb_restorecurloc(cb, sloc);
-  UNPROTECT(9); // afun, acall_args, acall, cexpr_args, cexpr, inner, outer, another_inner, third_inner
+  UNPROTECT(7); // afun, acall_args, acall, cexpr_args, cexpr, another_inner, third_inner
 
 }
 
@@ -4386,7 +4365,6 @@ bool cmp_subset_dispatch( int start_op, dlftop dlftop, SEXP e, CodeBuffer * cb, 
     
     SEXP oe = CADR(e);
     if ( oe == R_MissingArg ) {
-      //PASS
       return false;
     }
 
@@ -4504,7 +4482,6 @@ bool inline_subset( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
     return cmp_subset_dispatch( STARTSUBSET_N_OP, dlftop, e, cb, cntxt );
 
   }
-
 
 };
 
@@ -4903,7 +4880,6 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def) {
 bool simple_formals(SEXP def) {
   SEXP forms = R_ClosureFormals(def);
   
-  // False if "..." is involved
   SEQ_ALONG( node, forms ) {
     
     if (TAG(node) == R_DotsSymbol)
