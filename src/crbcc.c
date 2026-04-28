@@ -2929,12 +2929,47 @@ SEXP compile( SEXP e, SEXP env, SEXP options, SEXP srcref ) {
 
 }
 
+SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP srefs, SEXP verbose) {
+  
+  SEXP ret_cforms = PROTECT(allocVector(VECSXP, INTEGER(nforms)[0]));
+
+  CompilerEnv* cenv = make_cenv(env);
+  CompilerContext* cntxt = make_toplevel_ctx(cenv, options);
+  ExtraVars empty = { NULL, 0 };
+  add_cenv_vars( cenv, find_locals_list( forms, empty, cntxt ) );
+
+  for ( int i = 0; i < INTEGER(nforms)[0]; i++ ) {
+
+    SEXP e = VECTOR_ELT(forms, i);
+
+    SEXP sref = R_NilValue;
+
+    if ( i < length(srefs) ) {
+      SEXP sref = VECTOR_ELT(srefs, i);
+    }
+      
+    //TODO verbose option
+
+    Loc loc = { false, e, sref };
+
+    if ( ! may_call_browser(e, cntxt) )
+      SET_VECTOR_ELT(ret_cforms, i, gen_code(e, cntxt, R_NilValue, loc));
+    else
+      SET_VECTOR_ELT(ret_cforms, i, VECTOR_ELT(cforms, i));
+
+  }
+
+  UNPROTECT(1);
+  return ret_cforms;
+
+}
+
 // Registration of C functions
 static const R_CallMethodDef CallEntries[] = {
     {"cmpfun", (DL_FUNC) &cmpfun, 2},
     {"is_compiled", (DL_FUNC) &is_compiled, 1},
     {"compile", (DL_FUNC) &compile, 4},
-    {"cmpfile", (DL_FUNC) NULL, 0},
+    {"cmpfile", (DL_FUNC) &cmpfile, 7},
     {NULL, NULL, 0}
 };
 
