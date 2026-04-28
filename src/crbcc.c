@@ -1019,12 +1019,16 @@ static Folded constant_fold_call(SEXP e, CompilerContext* cntxt) {
           return out;
         }
 
-      UNPROTECT(5);    // ffun, new_call, arglist, folded_values, arg_tags
-      return (Folded){false, R_NilValue};
-    } else {
-      UNPROTECT(3);    // ffun, folded_values, arg_tags
+        UNPROTECT(5);    // ffun, new_call, arglist, folded_values, arg_tags
+        return (Folded){false, R_NilValue};
+
+      } else {
+        UNPROTECT(2);    // folded_values, arg_tags
+      }
     }
-  }
+
+    UNPROTECT(1); //ffun
+
   }
 
   return (Folded){false, R_NilValue};
@@ -2016,6 +2020,7 @@ CompilerOptions extract_options(SEXP optlist) {
 
   SEXP names = PROTECT( Rf_getAttrib(optlist, R_NamesSymbol) );
   if (names == R_NilValue) {
+    UNPROTECT(1); // names
     return ret;
   }
 
@@ -2759,17 +2764,17 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
 
       CompilerEnv* cenv = make_cenv(R_ClosureEnv(f));
       CompilerContext* cntxt = make_toplevel_ctx(cenv, compiler_options);
-      CompilerEnv* fenv = make_fun_env(R_ClosureFormals(f), R_ClosureBody(f), cntxt);
+      CompilerEnv* fenv = make_fun_env(R_ClosureFormals(f), R_ClosureExpr(f), cntxt);
       CompilerContext* ncntxt =
-          make_function_ctx(cntxt, fenv, R_ClosureFormals(f), R_ClosureBody(f));
+          make_function_ctx(cntxt, fenv, R_ClosureFormals(f), R_ClosureExpr(f));
 
-      if (may_call_browser(R_ClosureBody(f), ncntxt)) {
+      if (may_call_browser(R_ClosureExpr(f), ncntxt)) {
         return f;
       }
 
       bool is_block = false;
-      if (TYPEOF(R_ClosureBody(f)) == LANGSXP) {
-        SEXP sym = CAR(R_ClosureBody(f));
+      if (TYPEOF(R_ClosureExpr(f)) == LANGSXP) {
+        SEXP sym = CAR(R_ClosureExpr(f));
         if (TYPEOF(sym) == SYMSXP) {
           const char* name = CHAR(PRINTNAME(sym));
           if (strcmp(name, "{") == 0) {
@@ -2782,12 +2787,12 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
       loc.is_null = false;
 
       if (!is_block) {
-        loc.expr = R_ClosureBody(f);
+        loc.expr = R_ClosureExpr(f);
         loc.srcref = get_expr_srcref(f);
       } else
         loc.is_null = true;
 
-      SEXP b = PROTECT(gen_code(R_ClosureBody(f), ncntxt, loc));
+      SEXP b = PROTECT(gen_code(R_ClosureExpr(f), ncntxt, loc));
 
       SEXP val = PROTECT( R_mkClosure(R_ClosureFormals(f), b, R_ClosureEnv(f)) );
 
