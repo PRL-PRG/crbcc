@@ -79,13 +79,29 @@ opts <- list(
 cf <- cmpfun(function(x) x + pi, options = opts)
 ```
 
-## Testing
+## Contributing
 
-Run the project's test scripts with:
+Contributions are welcome.
+
+- Open an issue first for bugs, regressions, or feature proposals.
+- Keep pull requests focused and small when possible.
+- Follow existing code style and project structure.
+- Do not modify tests to make changes pass. Compatibility with GNU R compiler behavior is expected to remain 1:1.
+- Run package checks before submitting:
 
 ```bash
-make test
+R CMD check .
 ```
+
+## Known limitations
+
+- Warning output is not yet guaranteed to be 1:1 with GNU R's `compiler` package in all cases.
+- `cmpfile()` currently does not support a functional `verbose` mode (the argument exists but is not implemented).
+
+## Citation
+
+Citation details are pending and will be added once the associated bachelor's thesis is publicly released.
+For now, please reference the repository URL: <https://github.com/PRL-PRG/crbcc>.
 
 ## Performance
 
