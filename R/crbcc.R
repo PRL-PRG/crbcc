@@ -1,4 +1,6 @@
 #  crbcc: C R Bytecode Compiler
+#  R/crbcc.R
+
 #  Copyright (C) 2026 Josef Malý
 #  Copyright (C) 2026 Faculty of Information Technology, CTU in Prague
 
@@ -105,12 +107,13 @@ cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = 
   if (infile == outfile)
     stop("input and output file names are the same")
 
-  if (! is.environment(env) || ! identical(env, topenv(env)))
+  if (!is.environment(env) || !identical(env, topenv(env)))
     stop("'env' must be a top level environment")
 
   forms <- parse(infile)
   nforms <- length(forms)
   srefs <- attr(forms, "srcref")
+
   if (nforms > 0) {
 
     expr.needed <- 1000
@@ -125,13 +128,29 @@ cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = 
     cforms <- .Call(C_cmpfile, env, options, forms, nforms, cforms, srefs, verbose)
 
     cat(gettextf("saving to file \"%s\" ... ", outfile))
-    .Internal(save.to.file(cforms, outfile, ascii, version))
+    saveRDS(cforms, file = outfile, ascii = ascii, version = version)
     cat(gettext("done"), "\n", sep = "")
 
   } else
-    warning("empty input file; no output written");
+    warning("empty input file; no output written")
 
   invisible(NULL)
+}
 
-} 
-
+#' Load a Compiled R File
+#'
+#' Loads bytecode compiled by \code{\link{cmpfile}} into an environment.
+#'
+#' @param file Path to the compiled \code{.Rc} file.
+#' @param envir The environment to load into (default: .GlobalEnv).
+#'
+#' @return Invisible NULL.
+#' @export
+loadcmp <- function(file, envir = .GlobalEnv) {
+  if (!is.environment(envir))
+    stop("'envir' must be an environment")
+  cforms <- readRDS(file)
+  for (form in cforms)
+    eval(form, envir = envir)
+  invisible(NULL)
+}

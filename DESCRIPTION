@@ -7,6 +7,7 @@ Authors@R: c(
   )
 Description: R bytecode compiler implemented in C.
 License: GPL (>= 2)
+License_file: LICENSE
 Encoding: UTF-8
 LazyData: true
 RoxygenNote: 7.1.1
