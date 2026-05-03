@@ -9,13 +9,16 @@ This project was developed as part of a bachelor's thesis at FIT CTU.
 
 ## Features
 
+- 1:1 compatible output with current GNU-R compiler, tested on a corpus consisting of around 500,000 lines of code
+- 30x improvement on wall clock time when compiling base R packages
+
+## Interface
 - Compile closures with `crbcc::cmpfun()`
 - Compile generic language objects with `crbcc::compile()`
 - Compile full source files with `crbcc::cmpfile()`
 - Load compiled files with `crbcc::loadcmp()`
-- Redirect `compiler::cmpfun` to `crbcc::cmpfun` with `crbcc::hijack()`
-- Configurable compiler options (`optimize`, warning suppression controls)
-
+- Use in JIT compilation with `crbcc::hijack()`
+  
 ## Requirements
 
 - R >= 4.5.2
@@ -100,11 +103,10 @@ cf <- cmpfun(function(x) x + pi, options = opts)
 
 Contributions are welcome.
 
-- Open an issue first for bugs, regressions, or feature proposals.
+- Open an issue first for bugs, regressions, or feature proposals, especially if the compiler crashed on some expression or returned different results from GNU-R
 - Keep pull requests focused and small when possible.
-- Follow existing code style and project structure.
-- Do not modify tests to make changes pass. Compatibility with GNU R compiler behavior is expected to remain 1:1.
-- Run package checks before submitting:
+- Do not modify tests. Compatibility with GNU R compiler behavior is expected to remain 1:1.
+- Run package checks before submitting (no new warnings or errors should rise):
 
 ```bash
 R CMD check .
@@ -114,18 +116,15 @@ R CMD check .
 
 - Warning output is not yet guaranteed to be 1:1 with GNU R's `compiler` package in all cases.
 - `cmpfile()` currently does not support a functional `verbose` mode (the argument exists but is not implemented).
+- Saving and loading functionality is not compatible with the GNU-R compiler, since it uses .Internal calls to manage the files
 
 ## Citation
 
-Citation details are pending and will be added once the associated bachelor's thesis is publicly released.
-For now, please reference the repository URL: <https://github.com/PRL-PRG/crbcc>.
+Citation details are pending and will be added once the associated thesis is publicly released.
+If not available, reference the repository URL: <https://github.com/PRL-PRG/crbcc>.
 
 ## Performance
 
 Benchmark results against GNU R's compiler are available at:
 
 - `other/test_results/results/benchmark_report.md`
-
-## License
-
-GPL (>= 2)
