@@ -1,4 +1,6 @@
 #  crbcc: C R Bytecode Compiler
+#  tests/synthetic/warnings-errors.R
+
 #  Copyright (C) 2026 Josef Malý
 #  Copyright (C) 2026 Faculty of Information Technology, CTU in Prague
 

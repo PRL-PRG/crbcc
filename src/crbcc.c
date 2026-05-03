@@ -1,5 +1,7 @@
 /*
  * crbcc: C R Bytecode Compiler
+ * src/crbcc.c
+ * 
  * Copyright (C) 2026 Josef Malý
  * Copyright (C) 2026 Faculty of Information Technology, CTU in Prague
  *
@@ -26,7 +28,6 @@
 #include <ctype.h>
 #include <stdarg.h>
 
-#define OPTIMIZE_INCOMPATIBLE false
 #define END_OPCODES -1
 
 static SEXP R_TrueValue;
@@ -38,8 +39,7 @@ static int BCVersion;
     int iter = 0; \
     for ( SEXP iter_name = along_var; iter_name != R_NilValue; iter_name = CDR(iter_name), iter++ )
 
-#define PUTCONST(const) cb_putconst(cb, const, true)
-#define PUTCONST_NODEDUP(const) cb_putconst(cb, const, false)
+#define PUTCONST(const) cb_putconst(cb, const)
 #define L(x) (-(x + 1)) // When inserting an unresolved label into instr. pool
 #define PUTCODE(...) cb_putcode(cb, __VA_ARGS__, END_OPCODES)
 #define PUTLABEL(x) cb_putlabel(cb, x)
@@ -369,7 +369,7 @@ void ensure_label_capacity(LabelTable *lt, int needed_index);
 // Code emission and constant pool management
 void cb_putcode(CodeBuffer *cb, ...);
 int cb_getcode(CodeBuffer *cb, int pos);
-int cb_putconst(CodeBuffer *cb, SEXP item, bool check_dedup);
+int cb_putconst(CodeBuffer *cb, SEXP item);
 SEXP cb_getconst(CodeBuffer *cb, int idx);
 void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, int * char_labels, int char_count, int char_pos);
 
@@ -2546,8 +2546,8 @@ void cb_putcode( CodeBuffer * cb, ... ) {
   int srcrefpatchend = cb->code_count;
 
   // handle source tracking
-  int expression_idx = cb->expr_tracking_on ? PUTCONST_NODEDUP( cb->current_expr ) : 0;
-  int srcref_idx = cb->srcref_tracking_on ? PUTCONST_NODEDUP( cb->current_srcref ) : 0;
+  int expression_idx = cb->expr_tracking_on ? PUTCONST( cb->current_expr ) : 0;
+  int srcref_idx = cb->srcref_tracking_on ? PUTCONST( cb->current_srcref ) : 0;
   
   for (int i = srcrefpatchstart; i < srcrefpatchend; i++) {
 
@@ -2578,7 +2578,7 @@ int cb_getcode( CodeBuffer * cb, int pos ) {
 };
 
 
-int cb_putconst( CodeBuffer * cb, SEXP item, bool check_dedup ) {
+int cb_putconst( CodeBuffer * cb, SEXP item ) {
   
   // Initialize constant pool if it doesn't exist
   if ( cb->constant_pool == R_NilValue ) {
@@ -2602,19 +2602,15 @@ int cb_putconst( CodeBuffer * cb, SEXP item, bool check_dedup ) {
 
   }
 
-  // Deep check only for check_dedup = TRUE
-  if (!OPTIMIZE_INCOMPATIBLE || check_dedup) {
-
-    for (int j = cb->const_count - 1; j >= 0; j--) {
-      SEXP compare = VECTOR_ELT( cb->constant_pool, j);
+  for (int j = cb->const_count - 1; j >= 0; j--) {
+    SEXP compare = VECTOR_ELT( cb->constant_pool, j);
+    
+    /* 16 - take closure environments into account  */
+    if (R_compute_identical(item, compare, 16)) {
       
-      /* 16 - take closure environments into account  */
-      if (R_compute_identical(item, compare, 16)) {
-        
-        // Found so return the existing index immediately,
-        // Do not increment const_count
-        return j;
-      }
+      // Found so return the existing index immediately,
+      // Do not increment const_count
+      return j;
     }
 
   }
