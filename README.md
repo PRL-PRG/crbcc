@@ -1,7 +1,9 @@
 # crbcc
 
 `crbcc` is an R package that compiles R code to bytecode using a C implementation.
-It is intended as a fast, drop-in alternative to `compiler::cmpfun`.
+It is intended as a fast, drop-in alternative to the base `compiler` package, for cases in which
+a reduced compilation time could be beneficial, eg. in research.
+However using `crbcc` for minor performance improvements inside R's JIT pipeline is also possible.
 
 This project was developed as part of a bachelor's thesis at FIT CTU.
 
@@ -11,6 +13,7 @@ This project was developed as part of a bachelor's thesis at FIT CTU.
 - Compile generic language objects with `crbcc::compile()`
 - Compile full source files with `crbcc::cmpfile()`
 - Load compiled files with `crbcc::loadcmp()`
+- Redirect `compiler::cmpfun` to `crbcc::cmpfun` with `crbcc::hijack()`
 - Configurable compiler options (`optimize`, warning suppression controls)
 
 ## Requirements
@@ -45,6 +48,20 @@ f <- function(x) {
 cf <- cmpfun(f, options = list(optimize = 2))
 cf(10)
 ```
+
+## Hijack compiler::cmpfun
+
+`hijack()` replaces `compiler::cmpfun` inside the `compiler` namespace for the current R session.
+This monkey-patch is intentional: it lets `crbcc` take over call paths that go through `compiler::cmpfun`, including JIT-related compilation flow.
+
+```r
+library(crbcc)
+
+hijack()
+compiler::cmpfun(function(x) x + 1)
+```
+
+After calling `hijack()`, compiler behavior is changed globally for the active R session.
 
 ## Compile an R file
 
