@@ -127,4 +127,4 @@ If not available, reference the repository URL: <https://github.com/PRL-PRG/crbc
 
 Benchmark results against GNU R's compiler are available at:
 
-- `other/test_results/results/benchmark_report.md`
+- `utils/bench.md`
