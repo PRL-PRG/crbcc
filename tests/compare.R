@@ -33,7 +33,7 @@ PACKAGES_RECOMMENDED = c(
 
 # Define corpus here, using a
 # lightweight test for CRAN
-PACKAGES <- PACKAGES_CRAN
+PACKAGES <- c(PACKAGES_CRAN, PACKAGES_BASE, PACKAGES_RECOMMENDED)
 
 OPTIONS = list(
   optimize=2

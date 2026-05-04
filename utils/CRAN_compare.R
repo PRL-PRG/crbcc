@@ -3,7 +3,7 @@ CRAN_WHEN <- "last-week"
 CRAN_FALLBACK_TO_STATIC <- FALSE
 
 # If TRUE, install missing target packages before running checks.
-INSTALL_MISSING_PACKAGES <- FALSE
+INSTALL_MISSING_PACKAGES <- TRUE
 
 # If TRUE, remove newly installed CRAN packages after run.
 # Base/recommended packages are never removed.
