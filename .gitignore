@@ -6,7 +6,6 @@
 *.so
 *.dll
 build/
-man/
 
 # R session files
 .RData
