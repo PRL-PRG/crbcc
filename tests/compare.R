@@ -17,18 +17,28 @@
 if (!requireNamespace("compiler", quietly = TRUE)) stop("Package 'compiler' is required.")
 if (!requireNamespace("crbcc", quietly = TRUE)) stop("Package 'crbcc' is required.")
 
+PACKAGES_CRAN = c("base", "compiler")
+
+PACKAGES_BASE = c(
+  # "datasets" omitted since it contains no closures 
+  "base", "compiler", "graphics", "grDevices", "grid",
+  "methods", "parallel", "splines", "stats", "stats4", "tcltk", "tools"
+) 
+
+PACKAGES_RECOMMENDED = c(
+  # Recommended
+  "KernSmooth", "MASS", "Matrix", "boot", "class", "cluster", "codetools",
+  "foreign", "lattice", "mgcv", "nlme", "nnet", "rpart", "spatial", "survival"
+)
+
+# Define corpus here, using a
+# lightweight test for CRAN
+PACKAGES <- PACKAGES_CRAN
+
 OPTIONS = list(
   optimize=2
 )
 
-PACKAGES = c(
-  # Base - "datasets" omitted since it contains no closures 
-  "base", "compiler", "graphics", "grDevices", "grid",
-  "methods", "parallel", "splines", "stats", "stats4", "tcltk", "tools"
-
-  #"KernSmooth", "MASS", "Matrix", "boot", "class", "cluster", "codetools",
-  #"foreign", "lattice", "mgcv", "nlme", "nnet", "rpart", "spatial", "survival"
-)
 
 grand_total_funs   <- 0L
 grand_total_lines  <- 0L
@@ -104,7 +114,7 @@ test_package <- function(package, torture=FALSE) {
       cat(sprintf("[FATAL] Compiler crashed!\n"))
       cat(sprintf("Stopped at: %s\n", func_id))
       cat(sprintf("Error: %s\n", e$message))
-      readLines(con = "stdin", n = 1)
+
       stop("Test suite halted due to fatal crash.")
     })
 

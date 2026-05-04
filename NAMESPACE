@@ -1,5 +1,4 @@
 useDynLib(crbcc, .registration = TRUE, .fixes = "C_")
-importFrom(utils, head)
 export(cmpfun)
 export(compile)
 export(cmpfile)

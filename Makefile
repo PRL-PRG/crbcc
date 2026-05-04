@@ -30,17 +30,6 @@ clean:
 	rm -f compile_commands.json
 	rm -rf man
 
-.PHONY: format
-format:
-	@echo "Formatting C source code..."
-	@if command -v $(CLANG_FORMAT) >/dev/null 2>&1; then \
-		$(CLANG_FORMAT) -i $(C_SOURCES) && \
-		echo "C source files formatted successfully"; \
-	else \
-		echo "Warning: clang-format not found. Please install clang-format."; \
-		exit 1; \
-	fi
-
 .PHONY: test
 test: install
 	@for f in tests/*.R; do \

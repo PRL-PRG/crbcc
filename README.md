@@ -21,7 +21,6 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 - Compile generic language objects with `crbcc::compile()`
 - Compile full source files with `crbcc::cmpfile()`
 - Load compiled files with `crbcc::loadcmp()`
-- Use in JIT compilation with `crbcc::hijack()`
   
 ## Requirements
 
