@@ -11,6 +11,15 @@ TARGETS <- list(
 )
 ######################
 
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) > 0) {
+  TARGETS <- lapply(args, function(arg) {
+    parts <- strsplit(arg, "::", fixed = TRUE)[[1]]
+    if (length(parts) != 2) stop("Expected target as package::name")
+    list(package = parts[1], name = parts[2])
+  })
+}
+
 if (!requireNamespace("crbcc", quietly = TRUE)) stop("Package 'crbcc' is required.")
 
 cat("Starting C-level profiling run...\n")
