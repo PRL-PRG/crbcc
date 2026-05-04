@@ -7,13 +7,11 @@ Authors@R: c(
   )
 Description: R bytecode compiler implemented in C.
 License: GPL (>= 2)
-License_file: LICENSE
 Encoding: UTF-8
 LazyData: true
 RoxygenNote: 7.1.1
-Depends: R (>= 4.5.2)
-Suggests: 
-    testthat (>= 3.0.0),
+Depends: R (>= 4.5.0)
+Suggests:
     compiler
 URL: https://github.com/PRL-PRG/crbcc
 BugReports: https://github.com/PRL-PRG/crbcc/issues

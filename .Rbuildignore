@@ -1,2 +1,9 @@
 ^other$
 ^\.clang-format$
+^\.vscode$
+^crbcc\.Rcheck$
+^crbcc_.*\.tar\.gz$
+^compile_commands\.json$
+^LICENSE$
+^src/.*\.(o|so)$
+^Makefile$

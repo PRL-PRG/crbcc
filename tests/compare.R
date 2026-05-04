@@ -22,13 +22,12 @@ OPTIONS = list(
 )
 
 PACKAGES = c(
-  # Base - "datasets" omitted since it has no closures 
+  # Base - "datasets" omitted since it contains no closures 
   "base", "compiler", "graphics", "grDevices", "grid",
-  "methods", "parallel", "splines", "stats", "stats4", "tcltk", "tools",
-  "translations", "utils",
-  # Recommended
-  "KernSmooth", "MASS", "Matrix", "boot", "class", "cluster", "codetools",
-  "foreign", "lattice", "mgcv", "nlme", "nnet", "rpart", "spatial", "survival"
+  "methods", "parallel", "splines", "stats", "stats4", "tcltk", "tools"
+
+  #"KernSmooth", "MASS", "Matrix", "boot", "class", "cluster", "codetools",
+  #"foreign", "lattice", "mgcv", "nlme", "nnet", "rpart", "spatial", "survival"
 )
 
 grand_total_funs   <- 0L

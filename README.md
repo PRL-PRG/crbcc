@@ -7,10 +7,14 @@ However using `crbcc` for minor performance improvements inside R's JIT pipeline
 
 This project was developed as part of a bachelor's thesis at FIT CTU.
 
+## Acknowledgement
+
+When possible, `crbcc` mirrors the architecture and logic used in the original GNU-R compiler package by Luke Tierney. The original compiler Noweb document is available at https://homepage.cs.uiowa.edu/~luke/R/compiler/compiler.pdf, or distributed as an R base package, available under the GPL-2 license. Most documentation provided in the document is relevant to `crbcc` as well.
+
 ## Features
 
-- 1:1 compatible output with current GNU-R compiler, tested on a corpus consisting of around 500,000 lines of code
-- 30x improvement on wall clock time when compiling base R packages
+- 1:1 compatible output with current GNU-R compiler, `cmpfun` tested on a corpus consisting of around 500,000 lines of code
+- 30x improvement on wall clock time when compiling base R packages, see Performance
 
 ## Interface
 - Compile closures with `crbcc::cmpfun()`
@@ -21,7 +25,7 @@ This project was developed as part of a bachelor's thesis at FIT CTU.
   
 ## Requirements
 
-- R >= 4.5.2
+- R >= 4.5.0
 - Build toolchain for compiling native C code
 
 ## Install
@@ -52,20 +56,6 @@ cf <- cmpfun(f, options = list(optimize = 2))
 cf(10)
 ```
 
-## Hijack compiler::cmpfun
-
-`hijack()` replaces `compiler::cmpfun` inside the `compiler` namespace for the current R session.
-This monkey-patch is intentional: it lets `crbcc` take over call paths that go through `compiler::cmpfun`, including JIT-related compilation flow.
-
-```r
-library(crbcc)
-
-hijack()
-compiler::cmpfun(function(x) x + 1)
-```
-
-After calling `hijack()`, compiler behavior is changed globally for the active R session.
-
 ## Compile an R file
 
 ```r
@@ -73,6 +63,17 @@ library(crbcc)
 
 cmpfile("script.R", "script.Rc")
 loadcmp("script.Rc", envir = .GlobalEnv)
+```
+
+## JIT compilation
+
+`crbcc` contains identical interface to the GNU-R compiler. Taking over JIT compilation is possible by updating the namespace of the compiler package. Keep in mind this changes the `compiler::cmpfun` definition in the entire R session. Intended for experimental use only.
+
+```r
+compiler_ns <- getNamespace("compiler")
+unlockBinding("cmpfun", compiler_ns)
+compiler_ns$cmpfun <- crbcc::cmpfun
+lockBinding("cmpfun", compiler_ns)
 ```
 
 ## Compiler options
@@ -114,9 +115,9 @@ R CMD check .
 
 ## Known limitations
 
-- Warning output is not yet guaranteed to be 1:1 with GNU R's `compiler` package in all cases.
+- Warning output is not guaranteed to be 1:1 with GNU R's `compiler` package.
 - `cmpfile()` currently does not support a functional `verbose` mode (the argument exists but is not implemented).
-- Saving and loading functionality is not compatible with the GNU-R compiler, since it uses .Internal calls to manage the files
+- Saving and loading functionality is not compatible with the GNU-R compiler, since it uses an .Internal call to manage the files.
 
 ## Citation
 
