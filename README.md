@@ -13,7 +13,7 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 
 ## Features
 
-- 1:1 compatible output with current GNU-R compiler, `cmpfun` tested on a corpus consisting of around 500,000 lines of code
+- 1:1 compatible output with current GNU-R compiler; `cmpfun` tested on a corpus consisting of around 339,000 lines of code
 - 30x improvement on wall clock time when compiling base R packages, see Performance
 
 ## Interface
