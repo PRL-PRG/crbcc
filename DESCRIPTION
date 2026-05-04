@@ -5,7 +5,10 @@ Authors@R: c(
     person("Josef", "Malý", email = "malyjos4@fit.cvut.cz", role = c("aut", "cre")),
     person("Filip", "Křikava", role = "ths")
   )
-Description: R bytecode compiler implemented in C.
+Description: Implements a bytecode compiler for R in C, targeting functional
+    parity with the base 'compiler' package, while focusing on better performance.
+    The architecture mostly mirrors the original GNU-R compiler as described in
+    <https://homepage.cs.uiowa.edu/~luke/R/compiler/compiler.pdf>.
 License: GPL (>= 2)
 Encoding: UTF-8
 LazyData: true
