@@ -653,7 +653,7 @@ static void cntxt_warn(const char *msg, CompilerContext *cntxt, Loc loc) {
 
   char *full = add_loc_string(msg, loc);
   Rprintf("Note: %s\n", full);
-};
+}
 
 static void cntxt_stop(const char *msg, CompilerContext *cntxt, Loc loc) {
   char *full = add_loc_string(msg, loc);
@@ -680,7 +680,7 @@ static void notify_wrong_dots_use(SEXP var, CompilerContext *cntxt, Loc loc) {
   char msg[256];
   snprintf(msg, sizeof(msg), "%s may be used in an incorrect context", v);
   cntxt_warn(msg, cntxt, loc);
-};
+}
 
 static bool suppress_undef(SEXP name, CompilerContext *cntxt) {
   if (cntxt->options.suppress_all) return true;
@@ -877,7 +877,7 @@ static bool is_const_mode(SEXP e) {
   return (t == INTSXP || t == REALSXP || t == LGLSXP
           || t == NILSXP || t == CPLXSXP || t == STRSXP);
 
-};
+}
 
 Folded check_const(SEXP e) {
 
@@ -892,7 +892,7 @@ Folded check_const(SEXP e) {
 
   return (Folded){false, R_NilValue};
 
-};
+}
 
 static Folded constant_fold_sym(SEXP var, CompilerContext *cntxt) {
 
@@ -931,7 +931,7 @@ static SEXP get_fold_fun(SEXP var, CompilerContext *cntxt) {
 
   return R_NilValue;
 
-};
+}
 
 static Folded constant_fold_call(SEXP e, CompilerContext* cntxt) {
 
@@ -1067,7 +1067,7 @@ Folded constant_fold(SEXP e, CompilerContext* cntxt, Loc loc) {
     default:
       return check_const(e);
   }
-};
+}
 
 bool cmp_special(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
@@ -1085,7 +1085,7 @@ bool cmp_special(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   return true;
 
-};
+}
 
 
 void cmp_builtin_args(SEXP args, CodeBuffer *cb, CompilerContext *cntxt, bool missingOK) {
@@ -1194,7 +1194,7 @@ bool any_dots( SEXP args ) {
   }
   return false;
 
-};
+}
 
 
 InlineInfo get_inline_info(const char *name, CompilerContext* cntxt, bool guard_ok) {
@@ -1365,7 +1365,7 @@ void ensure_label_capacity(LabelTable *lt, int needed_index) {
     }
   }
 
-};
+}
 
 // Set the jump target
 void cb_putlabel(CodeBuffer * cb, int label_id) {
@@ -1507,7 +1507,7 @@ static bool is_base_var(SEXP sym, CompilerContext *cntxt) {
   return ( info.can_inline &&
     ( info.env == R_BaseEnv || info.env == R_BaseNamespace) );
 
-};
+}
 
 SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt ) {
 
@@ -1712,7 +1712,7 @@ const char * get_assigned_var( SEXP var, CompilerContext *cntxt ) {
     return CHAR( PRINTNAME(v) ); 
   }
 
-};
+}
 
 static NamesList union_sets(NamesList a, NamesList b) {
 
@@ -1752,7 +1752,7 @@ static NamesList union_sets(NamesList a, NamesList b) {
 
   return ret;
 
-};
+}
 
 NamesList find_locals_list( SEXP elist, NamesList known_locals, CompilerContext *cntxt ) {
 
@@ -1802,7 +1802,7 @@ NamesList find_locals_list( SEXP elist, NamesList known_locals, CompilerContext 
 
   return found;
 
-};
+}
 
 NamesList find_locals( SEXP expr, NamesList known_locals, CompilerContext *cntxt ) {
 
@@ -1879,7 +1879,7 @@ NamesList find_locals( SEXP expr, NamesList known_locals, CompilerContext *cntxt
     
   return find_locals_list( CDR( expr ), known_locals, cntxt );
 
-};
+}
 
 void add_cenv_vars( CompilerEnv * cenv, NamesList vars ) {
 
@@ -1891,7 +1891,7 @@ void add_cenv_vars( CompilerEnv * cenv, NamesList vars ) {
   
   cenv->top_frame->extra_vars = combined_vars;
   
-};
+}
 
 
 void add_cenv_frame( CompilerEnv * cenv, NamesList vars ) {
@@ -1907,7 +1907,7 @@ void add_cenv_frame( CompilerEnv * cenv, NamesList vars ) {
 
   add_cenv_vars( cenv, vars );
 
-};
+}
 
 CompilerEnv * make_cenv( SEXP env ) {
 
@@ -2112,7 +2112,7 @@ CompilerContext * make_function_ctx( CompilerContext * cntxt, CompilerEnv * fenv
   ncntxt->options = cntxt->options;
 
   return ncntxt;
-};
+}
 
 CompilerContext * make_call_ctx( CompilerContext * cntxt, SEXP call ) {
 
@@ -2124,7 +2124,7 @@ CompilerContext * make_call_ctx( CompilerContext * cntxt, SEXP call ) {
   ncntxt->call = call;
   return ncntxt;
 
-};
+}
 
 CompilerContext * make_non_tail_call_ctx( CompilerContext * cntxt ) {
 
@@ -2135,7 +2135,7 @@ CompilerContext * make_non_tail_call_ctx( CompilerContext * cntxt ) {
   ncntxt->tailcall = false;
   return ncntxt;
   
-};
+}
 
 CompilerContext * make_no_value_ctx( CompilerContext * cntxt ) {
 
@@ -2146,7 +2146,7 @@ CompilerContext * make_no_value_ctx( CompilerContext * cntxt ) {
   ncntxt->tailcall = false;
   return ncntxt;
   
-};
+}
 
 CompilerContext * make_loop_ctx( CompilerContext * cntxt, int loop_label, int end_label ) {
 
@@ -2159,7 +2159,7 @@ CompilerContext * make_loop_ctx( CompilerContext * cntxt, int loop_label, int en
 
   return ncntxt;
 
-};
+}
 
 CompilerContext * make_arg_ctx( CompilerContext * cntxt ) {
 
@@ -2177,7 +2177,7 @@ CompilerContext * make_arg_ctx( CompilerContext * cntxt ) {
 
   return ncntxt;
 
-};
+}
 
 CompilerContext * make_promise_ctx( CompilerContext * cntxt ) {
 
@@ -2195,7 +2195,7 @@ CompilerContext * make_promise_ctx( CompilerContext * cntxt ) {
 
   return ncntxt;
 
-};
+}
 
 CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
 
@@ -2251,7 +2251,7 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
   UNPROTECT(1); // constant_pool_handle
   return cb;
 
-};
+}
 
 void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
 
@@ -2269,7 +2269,7 @@ void cmp_const( SEXP val, CodeBuffer * cb, CompilerContext * cntxt ) {
   if ( cntxt->tailcall )
     PUTCODE( RETURN_OP );
 
-};
+}
 
 void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok ) {
 
@@ -2316,7 +2316,7 @@ void cmp_sym( SEXP sym, CodeBuffer * cb, CompilerContext * cntxt, bool missing_o
   if ( cntxt->tailcall )
     PUTCODE( RETURN_OP );
 
-};
+}
 
 void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_ok ) {
 
@@ -2368,7 +2368,7 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
 
   cb_restorecurloc( cb, saved );
 
-};
+}
 
 void cmp_call_sym_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
 
@@ -2387,7 +2387,7 @@ void cmp_call_sym_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, Compiler
   if ( cntxt->tailcall )
     PUTCODE( RETURN_OP );
 
-};
+}
 
 void cmp_call_expr_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
 
@@ -2403,7 +2403,7 @@ void cmp_call_expr_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, Compile
   if ( cntxt->tailcall )
     PUTCODE( RETURN_OP );
 
-};
+}
 
 void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool nse ) {
 
@@ -2468,7 +2468,7 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
 
   }
 
-};
+}
 
 void cmp_tag( SEXP tag, CodeBuffer * cb ) {
 
@@ -2483,7 +2483,7 @@ void cmp_tag( SEXP tag, CodeBuffer * cb ) {
   int ci = PUTCONST( tag );
   PUTCODE( SETTAG_OP, ci );
 
-};
+}
 
 void cmp_const_arg( SEXP a, CodeBuffer * cb, CompilerContext * cntxt ) {
 
@@ -2498,7 +2498,7 @@ void cmp_const_arg( SEXP a, CodeBuffer * cb, CompilerContext * cntxt ) {
     PUTCODE( PUSHCONSTARG_OP, ci );
   }
   
-};
+}
 
 void cb_putcode( CodeBuffer * cb, ... ) {
 
@@ -2565,7 +2565,7 @@ void cb_putcode( CodeBuffer * cb, ... ) {
 
   }
   
-};
+}
 
 int cb_getcode( CodeBuffer * cb, int pos ) {
 
@@ -2575,7 +2575,7 @@ int cb_getcode( CodeBuffer * cb, int pos ) {
 
   return cb->code[ pos ];
 
-};
+}
 
 
 int cb_putconst( CodeBuffer * cb, SEXP item ) {
@@ -2646,7 +2646,7 @@ int cb_putconst( CodeBuffer * cb, SEXP item ) {
   
   return new_idx;
 
-};
+}
 
 SEXP cb_getconst( CodeBuffer * cb, int idx ) {
 
@@ -2656,7 +2656,7 @@ SEXP cb_getconst( CodeBuffer * cb, int idx ) {
 
   return VECTOR_ELT( cb->constant_pool, idx );
 
-};
+}
 
 bool may_call_browser( SEXP expr, CompilerContext * cntxt ) {
 
@@ -2700,7 +2700,7 @@ bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt) {
 
   return false;
 
-};
+}
 
 void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, bool setloc ) {
 
@@ -2749,7 +2749,7 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
   if ( setloc )
     cb_restorecurloc(cb, sloc);
 
-};
+}
 
 SEXP cmpfun(SEXP f, SEXP compiler_options) {
 
@@ -2816,7 +2816,7 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
       Rf_error("Argument must be a closure, builtin, or special function");
   }
 
-};
+}
 
 SEXP gen_code( SEXP e, CompilerContext * cntxt, Loc loc ) {
 
@@ -3198,7 +3198,7 @@ bool inline_left_brace( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   return true;
 
-};
+}
 
 bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
@@ -3235,7 +3235,7 @@ bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   UNPROTECT(2); // body, const_list
   return true;
 
-};
+}
 
 bool inline_left_parenthesis( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
@@ -3261,7 +3261,7 @@ bool inline_left_parenthesis( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   cmp( CADR( e ), cb, cntxt, false, true );
   return true;
 
-};
+}
 
 bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
@@ -3288,7 +3288,7 @@ bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   return true;
 
-};
+}
 
 bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
@@ -3377,7 +3377,7 @@ bool inline_if( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   return true;
 
-};
+}
 
 bool inline_and( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
@@ -3421,7 +3421,7 @@ bool inline_or( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   return true;
 
-};
+}
 
 // forward declaration - circular
 bool check_skip_loop_cntxt(SEXP e, CompilerContext *cntxt, bool breakOK);
@@ -4412,7 +4412,7 @@ void cmp_indices(SEXP indices, CodeBuffer * cb, CompilerContext * cntxt) {
     cmp( CAR(i), cb, cntxt, true, true );
   }
 
-};
+}
 
 bool cmp_subset_dispatch( int start_op, dlftop dlftop, SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
 
@@ -4452,7 +4452,7 @@ bool cmp_subset_dispatch( int start_op, dlftop dlftop, SEXP e, CodeBuffer * cb, 
 
   return false;
 
-};
+}
 
 bool cmp_dispatch(int start_op, int dflt_op, SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok) {
 
@@ -4491,7 +4491,7 @@ bool cmp_dispatch(int start_op, int dflt_op, SEXP e, CodeBuffer * cb, CompilerCo
 
   return true;
 
-};
+}
 
 bool cmp_setter_dispatch(int start_op, int dflt_op, SEXP afun, SEXP place, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
 
@@ -4540,7 +4540,7 @@ bool inline_subset( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   }
 
-};
+}
 
 bool inline_subset2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
@@ -4566,7 +4566,7 @@ bool inline_subset2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
   }
 
-};
+}
 
 bool cmp_subassign_dispatch(int start_op, dlftop dfltop, SEXP afun, SEXP place, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
 
@@ -4782,7 +4782,7 @@ bool cmp_multi_colon(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     return false;
   }
 
-};
+}
 
 bool inline_with(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
@@ -4793,7 +4793,7 @@ bool inline_with(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   cntxt->options.suppress_all_undef = suppress;
   return true;
 
-};
+}
 
 bool inline_required(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
@@ -5129,7 +5129,7 @@ bool cmp_is( int op, SEXP e, CodeBuffer *cb, CompilerContext * cntxt ) {
     return true;
   }
 
-};
+}
 
 bool inline_is_character(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   return cmp_is(ISCHARACTER_OP, e, cb, cntxt);
