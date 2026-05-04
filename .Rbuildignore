@@ -1,4 +1,4 @@
-^other$
+^utils$
 ^\.clang-format$
 ^\.vscode$
 ^crbcc\.Rcheck$
