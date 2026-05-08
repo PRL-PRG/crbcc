@@ -1,11 +1,15 @@
-##########################################
 # COMPILER BENCHMARKING (FUNCTION-BY-FUNCTION)
-# ALL PATHS RELATIVE TO GIT ROOT
-##########################################
+
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) != 2) {
+  stop("Usage: Rscript benchmark.R <package_name> <function_name>\nExample: Rscript benchmark.R compiler cmpfun\n")
+}
+
+COMPILER_PKG <- args[1]
+COMPILER_FUN_NAME <- args[2]
+OUTPUT_FILE <- sprintf("test_results/%s.csv", COMPILER_PKG)
 
 # ---- CONFIG ----
-COMPILER_PKG <- "compiler"
-COMPILER_FUN <- compiler::cmpfun
 OPTIMIZE <- 2
 ITERS_PER_FN <- 10
 
@@ -17,12 +21,13 @@ PACKAGES_TO_TEST = c(
   "KernSmooth", "MASS", "Matrix", "boot", "class", "cluster", "codetools",
   "foreign", "lattice", "mgcv", "nlme", "nnet", "rpart", "spatial", "survival"
 )
-
-OUTPUT_FILE <- "test_results/new/compile_benchmark.csv"
 # ----------------
 
 if (!requireNamespace("bench", quietly = TRUE)) stop("Package 'bench' is required.")
 if (!requireNamespace(COMPILER_PKG, quietly = TRUE)) stop(sprintf("Package '%s' is required.", COMPILER_PKG))
+
+# Dynamically resolve the target function from the specified namespace
+COMPILER_FUN <- get(COMPILER_FUN_NAME, envir = asNamespace(COMPILER_PKG))
 
 packages <- unique(c("bench", COMPILER_PKG, PACKAGES_TO_TEST))
 

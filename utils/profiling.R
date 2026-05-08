@@ -1,15 +1,12 @@
-######################
 # PROFILING SCRIPT
 # (No comparing or measuring, run with external profiler)
-######################
+
 ITERATIONS <- 500
 OPTIMIZE_LEVEL <- 2
 
-# Currently The Top 20 Global Worst Performers
 TARGETS <- list(
   list(package = "compiler", name = ".onLoad")
 )
-######################
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) > 0) {
