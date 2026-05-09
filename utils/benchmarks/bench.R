@@ -14,9 +14,10 @@ OPTIMIZE <- 2
 ITERS_PER_FN <- 10
 
 PACKAGES_TO_TEST = c(
-  # "datasets" omitted since it contains no closures 
-  "base", "compiler", "graphics", "grDevices", "grid",
+  # "datasets" and "translations" omitted since they contains no closures 
+  "base", "compiler", "graphics", "grDevices", "grid", "utils",
   "methods", "parallel", "splines", "stats", "stats4", "tools",
+  "tcltk",
   # Recommended
   "KernSmooth", "MASS", "Matrix", "boot", "class", "cluster", "codetools",
   "foreign", "lattice", "mgcv", "nlme", "nnet", "rpart", "spatial", "survival"
