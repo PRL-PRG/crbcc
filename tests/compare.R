@@ -61,11 +61,11 @@ bytecode_size <- function(xs) {
 }
 
 compare_compilers <- function(prog) {
+
   res_compiler <- compiler::cmpfun(prog, options=OPTIONS)
   res_crbcc    <- crbcc::cmpfun(prog, options=OPTIONS)
-
   grand_total_instrs <<- grand_total_instrs + bytecode_size(res_crbcc)
-
+  
   identical(res_compiler, res_crbcc,
     num.eq             = FALSE,
     single.NA          = FALSE,
@@ -74,7 +74,11 @@ compare_compilers <- function(prog) {
     ignore.environment = FALSE,
     ignore.srcref      = FALSE,
     extptr.as.ref      = TRUE
-  )
+  ) &&
+  isS4(res_compiler)         == isS4(res_crbcc)         &&
+  is.object(res_compiler)    == is.object(res_crbcc)    &&
+  class(res_compiler)        == class(res_crbcc)
+  
 }
 
 test_package <- function(package, torture=FALSE) {

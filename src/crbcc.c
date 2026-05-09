@@ -2792,18 +2792,13 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
 
       SEXP val = PROTECT( R_mkClosure(R_ClosureFormals(f), b, R_ClosureEnv(f)) );
 
-      SEXP attrs = PROTECT( Rf_getAttrib(f, R_NamesSymbol) );
-      if (attrs != R_NilValue) {
-        Rf_setAttrib(val, attrs, R_NamesSymbol);
-      }
+      DUPLICATE_ATTRIB(val, f);
 
       if (Rf_isS4(f)) {
-        UNPROTECT(1); // val
-        val = Rf_asS4(val, FALSE, 0);
-        PROTECT(val); // Not sure about this, but whatever
+        val = Rf_asS4(val, true, 0);
       }
 
-      UNPROTECT(3);  // b, val, attrs
+      UNPROTECT(2);  // b, val
       
       return val;
     
