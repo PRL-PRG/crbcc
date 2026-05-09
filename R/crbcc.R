@@ -36,6 +36,34 @@ cmpfun <- function(fun, options = list()) {
   .Call(C_cmpfun, fun, options)
 }
 
+
+#' Tries to compile R Function to Bytecode, returns uncompiled on error
+#'
+#' Compiles an R function to bytecode using a C-based compiler.
+#'
+#' @param fun A closure to be compiled to bytecode
+#' @param options A list of compilation options
+#'
+#' @return bytecode compiled function or return unchanged on error
+#'
+#' @export
+tryCmpfun <- function(fun, options = list()) {
+
+  if (!is_closure(fun)) {
+    stop("Argument 'fun' must be a closure (user-defined function)")
+  }
+
+  if (!is.list(options)) {
+    stop("Argument 'options' must be a list")
+  }
+
+  tryCatch(
+    cmpfun(fun, options = options),
+    error = function(e) f
+  )
+  
+}
+
 #' Check if Object is a Closure
 #'
 #' Internal helper function to check if an object is a closure
