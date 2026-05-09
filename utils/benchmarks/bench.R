@@ -1,13 +1,13 @@
 # COMPILER BENCHMARKING (FUNCTION-BY-FUNCTION)
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) != 2) {
-  stop("Usage: Rscript benchmark.R <package_name> <function_name>\nExample: Rscript benchmark.R compiler cmpfun\n")
+if (length(args) != 3) {
+  stop("Usage: Rscript benchmark.R <package_name> <function_name> <output_csv>\nExample: Rscript benchmark.R compiler cmpfun res.csv\n")
 }
 
 COMPILER_PKG <- args[1]
 COMPILER_FUN_NAME <- args[2]
-OUTPUT_FILE <- sprintf("test_results/%s.csv", COMPILER_PKG)
+OUTPUT_FILE <- args[3]
 
 # ---- CONFIG ----
 OPTIMIZE <- 2
@@ -22,6 +22,8 @@ PACKAGES_TO_TEST = c(
   "foreign", "lattice", "mgcv", "nlme", "nnet", "rpart", "spatial", "survival"
 )
 # ----------------
+
+PACKAGES_TO_TEST = c("utils")
 
 if (!requireNamespace("bench", quietly = TRUE)) stop("Package 'bench' is required.")
 if (!requireNamespace(COMPILER_PKG, quietly = TRUE)) stop(sprintf("Package '%s' is required.", COMPILER_PKG))
