@@ -86,14 +86,14 @@ compile <- function(e, env = .GlobalEnv, options = NULL, srcref = NULL) {
 #' @param outfile Path to the output file. If missing, defaults to the input file name with extension replaced by ".Rc".
 #' @param ascii Logical; whether to write an ASCII file.
 #' @param env The top-level environment in which to evaluate expressions (default: .GlobalEnv).
-#' @param verbose Logical; print compilation progress messages.
+#' @param verbose Logical; Not yet implemented, print compilation progress messages.
 #' @param options List of compilation options.
 #' @param version Optional file format version.
 #'
 #' @return Invisible NULL. Output is written to file as a side effect.
 #' @export
 cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = FALSE, options = NULL, version = NULL) {
-  
+
   if (verbose) {
     warning("verbose not yet implemented, defaulting to false")
     verbose <- FALSE
@@ -102,6 +102,7 @@ cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = 
   if (missing(outfile)) {
     basename <- sub("\\.[a-zA-Z0-9]$", "", infile)
     outfile <- paste0(basename, ".Rc")
+    stop("an output file must be provided, eg. ", outfile)
   }
 
   if (infile == outfile)
@@ -127,9 +128,9 @@ cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = 
     cforms <- vector("list", nforms)
     cforms <- .Call(C_cmpfile, env, options, forms, nforms, cforms, srefs, verbose)
 
-    cat(gettextf("saving to file \"%s\" ... ", outfile))
+    message(gettextf("saving to file \"%s\" ... ", outfile))
     saveRDS(cforms, file = outfile, ascii = ascii, version = version)
-    cat(gettext("done"), "\n", sep = "")
+    message(gettext("done"), "\n", sep = "")
 
   } else
     warning("empty input file; no output written")
@@ -141,12 +142,12 @@ cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = 
 #'
 #' Loads bytecode compiled by \code{\link{cmpfile}} into an environment.
 #'
-#' @param file Path to the compiled \code{.Rc} file.
-#' @param envir The environment to load into (default: .GlobalEnv).
+#' @param file Path to the \code{.Rc} file compiled by 'crbcc' via 'cmpfile'.
+#' @param envir The environment to load into, use .GlobalEnv to load the code into current global session
 #'
 #' @return Invisible NULL.
 #' @export
-loadcmp <- function(file, envir = .GlobalEnv) {
+loadcmp <- function(file, envir) {
   if (!is.environment(envir))
     stop("'envir' must be an environment")
   cforms <- readRDS(file)

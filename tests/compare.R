@@ -22,7 +22,8 @@ PACKAGES_CRAN = c("base", "compiler")
 PACKAGES_BASE = c(
   # "datasets" omitted since it contains no closures 
   "base", "compiler", "graphics", "grDevices", "grid",
-  "methods", "parallel", "splines", "stats", "stats4", "tcltk", "tools"
+  "methods", "parallel", "splines", "stats", "stats4", "tcltk", "tools",
+  "translations", "utils"
 ) 
 
 PACKAGES_RECOMMENDED = c(
@@ -33,12 +34,11 @@ PACKAGES_RECOMMENDED = c(
 
 # Define corpus here, using a
 # lightweight test for CRAN
-PACKAGES <- c(PACKAGES_CRAN, PACKAGES_BASE, PACKAGES_RECOMMENDED)
+PACKAGES <- c(PACKAGES_CRAN, PACKAGES_RECOMMENDED, PACKAGES_BASE)
 
 OPTIONS = list(
   optimize=2
 )
-
 
 grand_total_funs   <- 0L
 grand_total_lines  <- 0L
@@ -79,7 +79,7 @@ compare_compilers <- function(prog) {
 
 test_package <- function(package, torture=FALSE) {
   if (!requireNamespace(package, quietly = TRUE)) {
-    cat(sprintf("\n[SKIP] Package not available: %s\n", package))
+    message(sprintf("\n[SKIP] Package not available: %s\n", package))
     return(invisible(NULL))
   }
 
@@ -106,14 +106,14 @@ test_package <- function(package, torture=FALSE) {
     tryCatch({
       res <- compare_compilers(uncompiled_funs[[i]])
       if (!res) {
-        cat(sprintf("[MISMATCH] Compilers are NOT identical!\n"))
-        cat(sprintf("Stopped at: %s\n", func_id))
+        message(sprintf("[MISMATCH] Compilers are NOT identical!\n"))
+        message(sprintf("Stopped at: %s\n", func_id))
         stop("Test suite halted due to fatal crash.")
       }
     }, error = function(e) {
-      cat(sprintf("[FATAL] Compiler crashed!\n"))
-      cat(sprintf("Stopped at: %s\n", func_id))
-      cat(sprintf("Error: %s\n", e$message))
+      message(sprintf("[FATAL] Compiler crashed!\n"))
+      message(sprintf("Stopped at: %s\n", func_id))
+      message(sprintf("Error: %s\n", e$message))
 
       stop("Test suite halted due to fatal crash.")
     })
@@ -125,15 +125,15 @@ test_package <- function(package, torture=FALSE) {
   grand_total_funs  <<- grand_total_funs  + compiled_ok
   grand_total_lines <<- grand_total_lines + total_lines
 
-  cat(sprintf("\n[OK] %d functions | %d lines compiled identically\n", compiled_ok, total_lines))
+  message(sprintf("\n[OK] %d functions | %d lines compiled identically\n", compiled_ok, total_lines))
 }
 
 for (i in PACKAGES) {
-  cat(sprintf("\n[START] Compiling package: %s ", i))
+  message(sprintf("\n[START] Compiling package: %s ", i))
   test_package(i)
 }
 
-cat(sprintf("\n%s\n[TOTAL] %d functions | %d lines | %d opcodes compiled across %d packages\n%s\n",
+message(sprintf("\n%s\n[TOTAL] %d functions | %d lines | %d opcodes compiled across %d packages\n%s\n",
   strrep("=", 60),
   grand_total_funs,
   grand_total_lines,

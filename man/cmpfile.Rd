@@ -15,7 +15,7 @@ cmpfile(infile, outfile, ascii = FALSE, env = .GlobalEnv,
   file name with extension replaced by \code{.Rc}.}
   \item{ascii}{Logical; whether to write an ASCII file.}
   \item{env}{The top-level environment in which to evaluate expressions.}
-  \item{verbose}{Logical; print compilation progress messages.}
+  \item{verbose}{Logical; Not yet implemented, print compilation progress messages.}
   \item{options}{List of compilation options.}
   \item{version}{Optional file format version.}
 }

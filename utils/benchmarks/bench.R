@@ -23,8 +23,6 @@ PACKAGES_TO_TEST = c(
 )
 # ----------------
 
-PACKAGES_TO_TEST = c("utils")
-
 if (!requireNamespace("bench", quietly = TRUE)) stop("Package 'bench' is required.")
 if (!requireNamespace(COMPILER_PKG, quietly = TRUE)) stop(sprintf("Package '%s' is required.", COMPILER_PKG))
 
