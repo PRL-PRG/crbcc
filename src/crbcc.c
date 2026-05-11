@@ -39,8 +39,10 @@ static int BCVersion;
     int iter = 0; \
     for ( SEXP iter_name = along_var; iter_name != R_NilValue; iter_name = CDR(iter_name), iter++ )
 
+// Simulate object-like behavior by assuming "cb" varibale is a code buffer pointer
+// in relevant functions
 #define PUTCONST(const) cb_putconst(cb, const)
-#define L(x) (-(x + 1)) // When inserting an unresolved label into instr. pool
+#define L(x) (-(x + 1)) // When inserting a label identifier into instr. pool
 #define PUTCODE(...) cb_putcode(cb, __VA_ARGS__, END_OPCODES)
 #define PUTLABEL(x) cb_putlabel(cb, x)
 
@@ -368,9 +370,7 @@ void ensure_label_capacity(LabelTable *lt, int needed_index);
 
 // Code emission and constant pool management
 void cb_putcode(CodeBuffer *cb, ...);
-int cb_getcode(CodeBuffer *cb, int pos);
 int cb_putconst(CodeBuffer *cb, SEXP item);
-SEXP cb_getconst(CodeBuffer *cb, int idx);
 void cb_putswitch(CodeBuffer *cb, int * int_labels, int int_count, int int_pos, int * char_labels, int char_count, int char_pos);
 
 // Constructors for various compiler contexts etc
@@ -402,7 +402,7 @@ void cmp_const_arg(SEXP a, CodeBuffer *cb, CompilerContext *cntxt);
 
 SEXP cmpfun(SEXP f, SEXP compiler_options);
 
-// Weird ahh functions
+// Misc
 bool find_var(SEXP var, CompilerContext *cntxt);
 NamesList find_locals(SEXP expr, NamesList known_locals, CompilerContext *cntxt);
 NamesList find_locals_list(SEXP elist, NamesList known_locals, CompilerContext *cntxt);
@@ -424,7 +424,7 @@ static SEXP R_bcVersion();
 static NamesList union_sets(NamesList a, NamesList b);
 Folded constant_fold(SEXP e, CompilerContext* cntxt, Loc loc);
 
-// Inlining
+// Inlining mechanism
 bool try_inline( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 InlineInfo get_inline_info( const char *name, CompilerContext * cntxt, bool guard_ok );
 bool get_inline_handler( const char *name, Inline in, CompilerContext * cntxt, HandlerFn * found );
@@ -433,7 +433,7 @@ bool get_inline_handler( const char *name, Inline in, CompilerContext * cntxt, H
 
 #pragma region Inline function declarations
 
-// The actual inlining handlers
+// Inline handlers
 bool inline_left_brace( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_function( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
 bool inline_return( SEXP e, CodeBuffer *cb, CompilerContext *cntxt );
@@ -752,6 +752,8 @@ static void notify_wrong_break_next(SEXP fun, CompilerContext *cntxt, Loc loc) {
 }
 
 static void notify_local_fun(SEXP fun, CompilerContext *cntxt, Loc loc) {
+  // Does nothing, remove?
+
   (void)fun;
   (void)cntxt;
   (void)loc;
@@ -1504,8 +1506,7 @@ void cb_setcurexpr(CodeBuffer *cb, SEXP expr) {
 static bool is_base_var(SEXP sym, CompilerContext *cntxt) {
 
   InlineInfo info = get_inline_info( CHAR(PRINTNAME(sym)), cntxt, false );
-  return ( info.can_inline &&
-    ( info.env == R_BaseEnv || info.env == R_BaseNamespace) );
+  return ( info.can_inline && info.in == BASE );
 
 }
 
@@ -1520,10 +1521,9 @@ SEXP find_fun_def( SEXP fun_sym, CompilerContext * cntxt ) {
     if (TYPEOF(val) == PROMSXP) {
         
       int err = 0;
-      
-      // Evaluating the symbol in the top frame forces the promise safely
       val = R_tryEval(fun_sym, cenv->r_env, &err);
       if (err) return R_NilValue;
+    
     }
     
     if ( Rf_isFunction( val ) ) {
@@ -1716,6 +1716,9 @@ const char * get_assigned_var( SEXP var, CompilerContext *cntxt ) {
 
 static NamesList union_sets(NamesList a, NamesList b) {
 
+  /* NOTE: Inefficient linear structure, O(a*b) dedup.
+   * Worth looking into in the future 
+   */
   if (a.count == 0) return b;
   if (b.count == 0) return a;
 
@@ -1756,7 +1759,6 @@ static NamesList union_sets(NamesList a, NamesList b) {
 
 NamesList find_locals_list( SEXP elist, NamesList known_locals, CompilerContext *cntxt ) {
 
-  // Initialize empty list of locals
   NamesList found = {NULL, 0};
 
   if ( (TYPEOF(elist) == LANGSXP) || (TYPEOF(elist) == LISTSXP) ) {
@@ -1764,10 +1766,7 @@ NamesList find_locals_list( SEXP elist, NamesList known_locals, CompilerContext 
     SEXP node = elist;
     while ( node != R_NilValue ) {
       
-      // Get the first element
       SEXP expr = CAR( node );
-
-      // Find locals in the expression
       NamesList new_vars = find_locals( expr, known_locals, cntxt );
 
       if ( new_vars.count != 0 ) {
@@ -1782,6 +1781,7 @@ NamesList find_locals_list( SEXP elist, NamesList known_locals, CompilerContext 
 
   }
 
+  // cmpfile case - vector iteration
   if ( TYPEOF(elist) == EXPRSXP ) {
 
     int len = Rf_length(elist);
@@ -1810,37 +1810,29 @@ NamesList find_locals( SEXP expr, NamesList known_locals, CompilerContext *cntxt
   ret.count = 0;
   ret.vars = NULL;
 
-  // Base case: expression is not a function call
   if ( TYPEOF( expr ) != LANGSXP ) return ret;
 
-  // here we know expr is a LANGSXP
   SEXP fun = CAR( expr );
 
-  // Lambda or anonymous function call
   if ( TYPEOF( fun ) != SYMSXP )
     return find_locals_list( expr, known_locals, cntxt );
 
-  // Its a function call with a symbol as function name
   const char* fname = CHAR( PRINTNAME( fun ) );
 
-  // Its an assignment?
   if ( strcmp( fname, "<-" ) == 0 || strcmp( fname, "=" ) == 0 ) {
     
-    // Assignment LHS (the variable being assigned to)
     const char * var =  get_assigned_var( expr, cntxt );
 
     ret.count = 1;
     ret.vars = (const char **) R_alloc(1, sizeof(const char *));
     ret.vars[0] = var;
     
-    // Recurse into RHS
     NamesList rhs_locals = find_locals( CADDR( expr ), known_locals, cntxt );
 
     return union_sets( rhs_locals, ret );
 
   }
 
-  // A for loop
   if ( strcmp( fname, "for" ) == 0 ) {
 
     const char * loop_var_raw = CHAR( PRINTNAME( CADR( expr ) ) );
@@ -1855,7 +1847,6 @@ NamesList find_locals( SEXP expr, NamesList known_locals, CompilerContext *cntxt
   
   }
 
-  // Scope barriers / primitives
   if ( strcmp( fname, "function" ) == 0 ||
        strcmp( fname, "quote" ) == 0 ||
        strcmp( fname, "expression" ) == 0 ) {
@@ -1883,7 +1874,6 @@ NamesList find_locals( SEXP expr, NamesList known_locals, CompilerContext *cntxt
 
 void add_cenv_vars( CompilerEnv * cenv, NamesList vars ) {
 
-  // Check if there is something to add
   if (vars.count == 0) return;
 
   NamesList current_vars = cenv->top_frame->extra_vars;
@@ -1911,11 +1901,9 @@ void add_cenv_frame( CompilerEnv * cenv, NamesList vars ) {
 
 CompilerEnv * make_cenv( SEXP env ) {
 
-  // Allocate the compilation environment entry point
   CompilerEnv *cenv = (CompilerEnv *) R_alloc (1, sizeof( CompilerEnv ));
   cenv->r_env = env;
   
-  // Allocate the topmost frame
   cenv->top_frame = (EnvFrame *) R_alloc (1, sizeof( EnvFrame ));
 
   NamesList nil = {NULL,0};
@@ -1977,6 +1965,7 @@ CompilerEnv * make_fun_env( SEXP forms, SEXP body, CompilerContext * cntxt ) {
 
   }
 
+  // Warn against special syntactic redef.
   const char *special_syntax_funs[] = {"~", "<-", "=", "for", "function", NULL};
   const char **syntactic = (const char **) R_alloc(locals.count, sizeof(const char *));
   int syntactic_count = 0;
@@ -2118,7 +2107,6 @@ CompilerContext * make_call_ctx( CompilerContext * cntxt, SEXP call ) {
 
   CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
   
-  // Copy over the parent
   *ncntxt = *cntxt;
 
   ncntxt->call = call;
@@ -2163,10 +2151,8 @@ CompilerContext * make_loop_ctx( CompilerContext * cntxt, int loop_label, int en
 
 CompilerContext * make_arg_ctx( CompilerContext * cntxt ) {
 
-  // Alloc new instance
   CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
 
-  // Copy over the parent
   *ncntxt = *cntxt;
   
   ncntxt->tailcall = false;
@@ -2183,7 +2169,6 @@ CompilerContext * make_promise_ctx( CompilerContext * cntxt ) {
 
   CompilerContext * ncntxt = (CompilerContext *) R_alloc (1, sizeof(CompilerContext) );
 
-  // Copy over the parent
   *ncntxt = *cntxt;
 
   ncntxt->tailcall = true;
@@ -2222,19 +2207,16 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
   cb->constant_pool_handle = Rf_allocVector(VECSXP, 1);
   PROTECT( cb->constant_pool_handle );
 
-  // Initialize code buffer itself
-  cb->code_capacity = 128; // Initial capacity
+  cb->code_capacity = 128; // Initial capacity - maybe move out into constant
   cb->code_count = 0;
   cb->code = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
   
-  // Initialize constant pool
-  cb->constant_pool = R_NilValue; // Empty list
+  cb->constant_pool = R_NilValue; // Constant pool is initialized on first insertion
   cb->const_count = 0;
 
   cb->switch_patches = NULL;
   cb->patch_tail = NULL;
 
-  // Initialize label table
   LabelTable lt;
   lt.capacity = 0;
   lt.labels_issued = 0;
@@ -2242,7 +2224,6 @@ CodeBuffer * make_code_buffer( SEXP preseed, Loc loc ) {
 
   cb->label_table = lt;
 
-  // Initialize source tracking
   cb->expr_buf = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
   cb->srcref_buf = (int *) R_alloc ( cb->code_capacity, sizeof( int ) );
 
@@ -2331,7 +2312,6 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
     
     if ( ! ( inline_ok && try_inline( call, cb, cntxt ) ) ) {
 
-      // If not inlinable:
       if ( find_loc_var(fun,cntxt) ) {
         notify_local_fun(fun, cntxt, cb_savecurloc(cb));
       } else {
@@ -2353,7 +2333,7 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
 
   } else {
     
-    // Hack for handling break() and next() calls
+    // From GNU-R compiler: Hack for handling break() and next() calls
     if ( TYPEOF( fun ) == LANGSXP && TYPEOF( CAR( fun )) == SYMSXP ) {
       const char* ch = CHAR( PRINTNAME( CAR( fun ) ) );
       if ( (strcmp( ch, "break" ) == 0) || (strcmp( ch, "next" ) == 0) ) {
@@ -2372,7 +2352,7 @@ void cmp_call( SEXP call, CodeBuffer * cb, CompilerContext * cntxt, bool inline_
 
 void cmp_call_sym_fun( SEXP fun, SEXP args, SEXP call, CodeBuffer * cb, CompilerContext * cntxt ) {
 
-  const char* maybe_NSE_symbols[] = {"bquote", NULL}; // Null works as terminator
+  const char* maybe_NSE_symbols[] = {"bquote", NULL};
   
   int ci = PUTCONST( fun );
   PUTCODE( GETFUN_OP, ci );
@@ -2414,7 +2394,6 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
     SEXP a = CAR( args );
     SEXP n = TAG( args );
 
-    // handle missing argument
     if ( a == R_MissingArg ) {
       PUTCODE( DOMISSING_OP );
       cmp_tag(n, cb);
@@ -2423,7 +2402,6 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
       continue;           
     }
 
-    // handle ... argument
     if ( (TYPEOF( a ) == SYMSXP) && (a == R_DotsSymbol) ) {
 
       if ( ! find_loc_var(R_DotsSymbol, cntxt) ) {
@@ -2445,7 +2423,6 @@ void cmp_call_args( SEXP args, CodeBuffer * cb, CompilerContext * cntxt, bool ns
     }
 
 
-    // compile general argument
     if ( TYPEOF( a ) == SYMSXP || TYPEOF( a ) == LANGSXP ) {
       int ci;
       if ( nse )
@@ -2510,22 +2487,22 @@ void cb_putcode( CodeBuffer * cb, ... ) {
   while (1) {
     int opcode = va_arg(args, int);
 
-    // Terminate processing when the sentinel is encountered
     if (opcode == END_OPCODES)
       break;
 
-    // Resize if needed
+    // Resize - doubling strat.
     if ( cb->code_count >= cb->code_capacity ) {
     
-      // Resize code array
       cb->code_capacity *= 2;
 
-      // realloc logic !! TOSTYLE duplicate code
+      /*
+       * NOTE: ugly duplicate code, all doubling allocations
+       * could get a helper function probably
+      */
       int *new_code = (int *) R_alloc(cb->code_capacity, sizeof(int));
       memcpy(new_code, cb->code, (cb->code_capacity / 2) * sizeof(int));
       cb->code = new_code;
     
-      // Update the source tracking buffers
       int *new_expr_buf = (int *) R_alloc(cb->code_capacity, sizeof(int));
       memcpy(new_expr_buf, cb->expr_buf, (cb->code_capacity / 2) * sizeof(int));
       cb->expr_buf = new_expr_buf;
@@ -2545,7 +2522,6 @@ void cb_putcode( CodeBuffer * cb, ... ) {
 
   int srcrefpatchend = cb->code_count;
 
-  // handle source tracking
   int expression_idx = cb->expr_tracking_on ? PUTCONST( cb->current_expr ) : 0;
   int srcref_idx = cb->srcref_tracking_on ? PUTCONST( cb->current_srcref ) : 0;
   
@@ -2567,17 +2543,6 @@ void cb_putcode( CodeBuffer * cb, ... ) {
   
 }
 
-int cb_getcode( CodeBuffer * cb, int pos ) {
-
-  if ( pos < 0 || pos >= cb->code_count ) {
-    Rf_error("CodeBuffer: Invalid code position");
-  }
-
-  return cb->code[ pos ];
-
-}
-
-
 int cb_putconst( CodeBuffer * cb, SEXP item ) {
   
   // Initialize constant pool if it doesn't exist
@@ -2587,14 +2552,15 @@ int cb_putconst( CodeBuffer * cb, SEXP item ) {
 
     cb->constant_pool = PROTECT( Rf_allocVector( VECSXP, cb->const_capacity ) );
 
-    // Link the constant pool to its handle (protects agains GC)
+    // See resizing for comment
     SET_VECTOR_ELT( cb->constant_pool_handle, 0, cb->constant_pool );
 
     UNPROTECT(1);
   }
 
-  // Check if item already exists in pool
+  // Check if item already exists in pool, try pointers only first
   for (int j = 0; j < cb->const_count; j++) {
+
     SEXP compare = VECTOR_ELT( cb->constant_pool, j);
     
     if (item == compare)
@@ -2602,10 +2568,11 @@ int cb_putconst( CodeBuffer * cb, SEXP item ) {
 
   }
 
+  // Proper identity check
   for (int j = cb->const_count - 1; j >= 0; j--) {
     SEXP compare = VECTOR_ELT( cb->constant_pool, j);
     
-    /* 16 - take closure environments into account  */
+    /* 16 - take closure environments into account, same as do_putconst in internals */
     if (R_compute_identical(item, compare, 16)) {
       
       // Found so return the existing index immediately,
@@ -2627,7 +2594,12 @@ int cb_putconst( CodeBuffer * cb, SEXP item ) {
       SET_VECTOR_ELT( new_pool, i, VECTOR_ELT( cb->constant_pool, i ) );
     }
 
-    // Swap the old pool from handler, old one will be garbage collected
+    /*
+     * NOTE: Link the constant pool to its handle (protects agains GC)
+     * Protection of constant pool then stems from protection of the handle,
+     * which is protected in gen_code. This way the new vector can be swapped.
+     * In the future maybe make the constant pool a C SEXP array?
+    */
     SET_VECTOR_ELT( cb->constant_pool_handle, 0, new_pool );
     
     cb->constant_pool = new_pool;
@@ -2635,26 +2607,11 @@ int cb_putconst( CodeBuffer * cb, SEXP item ) {
     UNPROTECT(1); // new_pool
   }
 
-  // Add the new item to the pool
   SET_VECTOR_ELT( cb->constant_pool, cb->const_count, item );
-  
-  // Capture the current index
   int new_idx = cb->const_count;
-  
-  // Increment the count
   cb->const_count++;
   
   return new_idx;
-
-}
-
-SEXP cb_getconst( CodeBuffer * cb, int idx ) {
-
-  if ( idx < 0 || idx >= cb->const_count ) {
-    Rf_error("CodeBuffer: Invalid constant index");
-  }
-
-  return VECTOR_ELT( cb->constant_pool, idx );
 
 }
 
@@ -2715,7 +2672,6 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
   
   if ( ! ce.folded ) {
 
-    // Not foldable, generate code normally
     SEXPTYPE type = TYPEOF( e );
     switch (type) {
       case LANGSXP:
@@ -2745,7 +2701,6 @@ void cmp( SEXP e, CodeBuffer * cb, CompilerContext * cntxt, bool missing_ok, boo
     UNPROTECT(1); //ce.value
   }
 
-  // Restore previous location
   if ( setloc )
     cb_restorecurloc(cb, sloc);
 
@@ -2789,7 +2744,6 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
         loc.is_null = true;
 
       SEXP b = PROTECT(gen_code(R_ClosureExpr(f), ncntxt, loc));
-
       SEXP val = PROTECT( R_mkClosure(R_ClosureFormals(f), b, R_ClosureEnv(f)) );
 
       DUPLICATE_ATTRIB(val, f);
@@ -2834,8 +2788,6 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
 
   cb_patchlabels(cb);
 
-  SEXP code_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1 ) );
-
   if ( cb->expr_tracking_on ) {
 
     SEXP expr_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1) );
@@ -2847,8 +2799,8 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
       expr_ptr[i+1] = cb->expr_buf[i];
 
     Rf_setAttrib(expr_vec, R_ClassSymbol, Rf_mkString("expressionsIndex"));
-    PUTCONST( expr_vec ); // Ensure expr_buf is in constant pool
-
+    
+    PUTCONST( expr_vec );
     UNPROTECT(1); // expr_vec
 
   }
@@ -2864,11 +2816,13 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
       srcref_ptr[i+1] = cb->srcref_buf[i];
 
     Rf_setAttrib(srcref_vec, R_ClassSymbol, Rf_mkString("srcrefsIndex"));
-    PUTCONST( srcref_vec ); // Ensure srcref_buf is in constant pool
+    PUTCONST( srcref_vec );
 
     UNPROTECT(1); // srcref_vec
 
   }
+
+  SEXP code_vec = PROTECT( Rf_allocVector( INTSXP, cb->code_count + 1 ) );
 
   // Put bytecode version as first instruction
   INTEGER(code_vec)[0] = Rf_asInteger(R_bcVersion());
@@ -2876,22 +2830,17 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
 
   SEXP const_pool;
 
-  if (cb->constant_pool == R_NilValue || cb->const_count == 0) {
-    // Create empty constant pool if no contants
-    const_pool = PROTECT(Rf_allocVector(VECSXP, 0));
+  // Resize constant pool to actual size, copy over content
+  const_pool = PROTECT(Rf_allocVector(VECSXP, cb->const_count));
+  
+  for (int i = 0; i < cb->const_count; i++)
+    SET_VECTOR_ELT(const_pool, i, VECTOR_ELT(cb->constant_pool, i));
 
-  } else {
-    // Resize constant pool to actual size
-    const_pool = PROTECT(Rf_allocVector(VECSXP, cb->const_count));
-    
-    for (int i = 0; i < cb->const_count; i++)
-      SET_VECTOR_ELT(const_pool, i, VECTOR_ELT(cb->constant_pool, i));
-    
-  }
-
-  // .Internal(mkCode(code, consts))
-  // NOTE: Calling .Internal is not safe and subject to change, however I am currently not aware
-  // of any other way to create a bytecode object, maybe change type of a cons cell?
+  /* .Internal(mkCode(code, consts))
+   * NOTE: Calling .Internal is not safe and subject to change, however we are not aware
+   * of any other way to create a bytecode object. This is the only way that doesnt raise
+   * automated CRAN check warnings
+   */
   SEXP mkCode_sym = Rf_install("mkCode");
   SEXP inner_call = PROTECT( Rf_lang3(mkCode_sym, code_vec, const_pool) );
     
@@ -2905,12 +2854,10 @@ SEXP code_buf_code( CodeBuffer * cb, CompilerContext * cntxt ) {
 
 }
 
-// ============================================================ //
-
 static SEXP R_bcVersion() {
   SEXP call, res;
 
-  // .Internal(bcVersion())
+  // .Internal(bcVersion()) --- ?
   call = PROTECT(Rf_lang1(Rf_install("bcVersion")));
   call = PROTECT(Rf_lang2(Rf_install(".Internal"), call));
 
@@ -2939,8 +2886,6 @@ SEXP compile( SEXP e, SEXP env, SEXP options, SEXP srcref ) {
 
   if ( may_call_browser( e, cntxt ) )
     return e;
-  else if (srcref == R_NilValue)
-    return gen_code( e, cntxt, loc );
   else
     return gen_code( e, cntxt, loc );
 
@@ -2965,7 +2910,7 @@ SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP 
       sref = VECTOR_ELT(srefs, i);
     }
       
-    //TODO verbose option
+    // TODO verbose option - currently disabled at R level
 
     Loc loc = { false, e, sref };
 
@@ -3001,16 +2946,16 @@ void R_init_crbcc(DllInfo* dll) {
 
 #pragma region Inlining mechanisms
 
+bool cmp_builtin_default( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
+  return cmp_builtin( e,cb,cntxt,false );
+}
+
 // Macro to reduce boilerplate for handler assignment
 #define INLINE_HANDLER_CASE(NAMESTR, FN) \
     if (strcmp(name, NAMESTR) == 0) { \
       *found = &FN; \
       return true; \
     }
-
-bool cmp_builtin_default( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
-  return cmp_builtin( e,cb,cntxt,false );
-}
 
 bool get_inline_handler( const char *name, Inline in, CompilerContext * cntxt, HandlerFn * found ) {
 
@@ -3100,7 +3045,11 @@ bool get_inline_handler( const char *name, Inline in, CompilerContext * cntxt, H
 
   }
 
-  // Check if is SPECIAL or BUILTIN
+  /*
+   * NOTE: Check if SPECIAL or BUILTIN may traverse entire env chain for each call,
+   * Is this more or less effective than preinstalling all symbols?
+   * Also this already happens in get_inline_info, at least pass that over.
+  */ 
   SEXP def = find_fun_def( Rf_install(name) , cntxt );
 
   if (TYPEOF(def) == BUILTINSXP) {
@@ -3418,7 +3367,7 @@ bool inline_or( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
 
 }
 
-// forward declaration - circular
+// forward declaration - circular dep.
 bool check_skip_loop_cntxt(SEXP e, CompilerContext *cntxt, bool breakOK);
 
 bool is_loop_stop_fun(const char *fname, CompilerContext *cntxt) {
@@ -3505,7 +3454,6 @@ bool inline_repeat(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   if (check_skip_loop_cntxt(body, cntxt, true)) {
     
-    // Optimization: context is simple enough to skip heavy setup
     cmp_repeat_body(body, cb, cntxt);
 
   } else {
@@ -3574,18 +3522,15 @@ bool cmp_while_body( SEXP call, SEXP condition, SEXP body, CodeBuffer * cb, Comp
   cb_putlabel( cb, loop_label );
 
   CompilerContext * lcntxt = make_loop_ctx( cntxt, loop_label, end_label );
-  // compile condition
+
   cmp( condition, cb, lcntxt, false, true );
 
   int callidx = PUTCONST( call );
   
-  // if condition evaluated to false jump to end 
   PUTCODE( BRIFNOT_OP, callidx, L(end_label) );
 
-  // compiled body
   cmp( body, cb, lcntxt, false, true );
 
-  // pop body result, go up the loop again
   PUTCODE( POP_OP, GOTO_OP, L(loop_label) );
   PUTLABEL( end_label);
 
@@ -4041,7 +3986,7 @@ SEXP copy_spine_and_append_value(SEXP args, SEXP vexpr) {
     SETCDR(tail, node);
     tail = node;
     
-    UNPROTECT(1); 
+    UNPROTECT(1); // node
   }
 
   SEXP val_node = PROTECT(Rf_allocList(1));
@@ -4057,6 +4002,10 @@ SEXP copy_spine_and_append_value(SEXP args, SEXP vexpr) {
   return result;
 }
 
+/*
+ * NOTE: this is messy (works tho)
+ * Look into simplifying
+*/
 void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, CompilerContext *cntxt) {
 
   SEXP afun = get_assign_fun(CAR(place));
@@ -4161,6 +4110,19 @@ FlattenedPlace flatten_place(SEXP place, CompilerContext *cntxt, Loc loc) {
   return result;
 }
 
+/*
+ *  It seems somehow appropriate at this point to mention that the section in the GNU-R compiler noweb implementing
+ *  the compiler semantics starts with the following comment:
+ *  
+ *    "
+ *    It seems somehow appropriate at this point to mention that the code in eval.c implementing the
+ *    interpreter semantics starts with the following comment:
+ *  
+ *      /*
+ *       * Assignments for complex LVAL specifications. This is the stuff that
+ *       * nightmares are made of ...
+ *     "
+ */
 bool cmp_complex_assign(SEXP symbol, SEXP lhs, SEXP value, bool superAssign, CodeBuffer *cb, CompilerContext *cntxt) {
     
   int start_op, end_op;
@@ -4289,7 +4251,6 @@ bool cmp_assign(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     return cmp_special(e, cb, cntxt);
   }
 
-  // new kind of comparasion, lets think
   bool super_assign = (strcmp( CHAR(PRINTNAME(CAR(e))), "<<-" ) == 0);
 
   SEXP lhs = CADR(e);
@@ -4672,7 +4633,6 @@ bool cmp_getter_dispatch(int start_op, int dflt_op, SEXP call, CodeBuffer * cb, 
 
 bool cmp_subset_getter_dispatch(int start_op, dlftop dfltop, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
 
-  // Fallback if missing args, named args, or insufficient length
   if ( dots_or_missing(call) || has_names(call) || Rf_length(call) < 3 ) {
     cntxt_stop("cannot compile this expression", cntxt, cb_savecurloc(cb));
     return false;
@@ -4992,7 +4952,6 @@ bool is_simple_internal(SEXP def) {
   return false;
 }
 
-// Note: forms is passed directly instead of names(forms) to do pointer matching on tags.
 bool simple_args(SEXP icall, SEXP forms) {
 
   SEQ_ALONG( node, CDR(icall) ) {
