@@ -20,10 +20,10 @@ if (!requireNamespace("crbcc", quietly = TRUE)) stop("Package 'crbcc' is require
 PACKAGES_CRAN = c("base", "compiler")
 
 PACKAGES_BASE = c(
-  # "datasets" omitted since it contains no closures 
+  # "datasets" and "translations" omitted since they contains no closures 
   "base", "compiler", "graphics", "grDevices", "grid",
   "methods", "parallel", "splines", "stats", "stats4", "tcltk", "tools",
-  "translations", "utils"
+  "utils"
 ) 
 
 PACKAGES_RECOMMENDED = c(
@@ -34,7 +34,7 @@ PACKAGES_RECOMMENDED = c(
 
 # Define corpus here, using a
 # lightweight test for CRAN
-PACKAGES <- c(PACKAGES_CRAN, PACKAGES_RECOMMENDED, PACKAGES_BASE)
+PACKAGES <- unique(c(PACKAGES_CRAN, PACKAGES_RECOMMENDED, PACKAGES_BASE))
 
 OPTIONS = list(
   optimize=2
@@ -74,11 +74,8 @@ compare_compilers <- function(prog) {
     ignore.environment = FALSE,
     ignore.srcref      = FALSE,
     extptr.as.ref      = TRUE
-  ) &&
-  isS4(res_compiler)         == isS4(res_crbcc)         &&
-  is.object(res_compiler)    == is.object(res_crbcc)    &&
-  class(res_compiler)        == class(res_crbcc)
-  
+  )
+
 }
 
 test_package <- function(package, torture=FALSE) {

@@ -1,0 +1,24 @@
+local({
+
+  .libPaths(c('/home/shieldjsf/R/x86_64-pc-linux-gnu-library/4.6', .libPaths()))
+  library(crbcc)
+  ns <- getNamespace("compiler")
+
+  crbcc_trycmpfun <- function(fun, options) {
+
+    tryCatch(
+        crbcc::cmpfun(fun, options = options),
+        error = function(e) fun
+    )    
+
+  }
+
+  unlockBinding("cmpfun", ns)
+  unlockBinding("compile", ns)
+  unlockBinding("tryCmpfun", ns)
+
+  ns$cmpfun    <- crbcc::cmpfun
+  ns$compile   <- crbcc::compile
+  ns$tryCmpfun <- crbcc_trycmpfun
+
+})
