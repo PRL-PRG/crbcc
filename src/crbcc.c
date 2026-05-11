@@ -39,8 +39,8 @@ static int BCVersion;
     int iter = 0; \
     for ( SEXP iter_name = along_var; iter_name != R_NilValue; iter_name = CDR(iter_name), iter++ )
 
-// Simulate object-like behavior by assuming "cb" varibale is a code buffer pointer
-// in relevant functions
+// assuming "cb" varibale is a code buffer pointer
+// in relevant context
 #define PUTCONST(const) cb_putconst(cb, const)
 #define L(x) (-(x + 1)) // When inserting a label identifier into instr. pool
 #define PUTCODE(...) cb_putcode(cb, __VA_ARGS__, END_OPCODES)
@@ -4347,10 +4347,10 @@ bool at_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeB
 
 }
 
-typedef struct dlftop {
+typedef struct dfltop {
   int code;
   bool rank;
-} dlftop;
+} dfltop;
 
 bool has_names(SEXP place) {
   for (SEXP s = place; s != R_NilValue; s = CDR(s)) {
@@ -4370,7 +4370,7 @@ void cmp_indices(SEXP indices, CodeBuffer * cb, CompilerContext * cntxt) {
 
 }
 
-bool cmp_subset_dispatch( int start_op, dlftop dlftop, SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
+bool cmp_subset_dispatch( int start_op, dfltop dfltop, SEXP e, CodeBuffer * cb, CompilerContext * cntxt ) {
 
   if ( dots_or_missing(e) || has_names(e) || Rf_length(e) < 3 ) {
     return false;
@@ -4392,10 +4392,10 @@ bool cmp_subset_dispatch( int start_op, dlftop dlftop, SEXP e, CodeBuffer * cb, 
     SEXP indices = CDDR(e);
     cmp_indices(indices, cb, ncntxt);
 
-    if (dlftop.rank)
-      PUTCODE( dlftop.code, ci, Rf_length(indices) );
+    if (dfltop.rank)
+      PUTCODE( dfltop.code, ci, Rf_length(indices) );
     else
-      PUTCODE( dlftop.code, ci );
+      PUTCODE( dfltop.code, ci );
 
     PUTLABEL( label);
 
@@ -4479,20 +4479,20 @@ bool inline_subset( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   } else {
 
     int nidx = Rf_length(e) - 2;
-    dlftop dlftop;
+    dfltop dfltop;
 
     if ( nidx == 1 ) {
-      dlftop.code = VECSUBSET_OP;
-      dlftop.rank = false;
+      dfltop.code = VECSUBSET_OP;
+      dfltop.rank = false;
     } else if (nidx == 2) {
-      dlftop.code = MATSUBSET_OP;
-      dlftop.rank = false;
+      dfltop.code = MATSUBSET_OP;
+      dfltop.rank = false;
     } else {
-      dlftop.code = SUBSET_N_OP;
-      dlftop.rank = true;
+      dfltop.code = SUBSET_N_OP;
+      dfltop.rank = true;
     }
 
-    return cmp_subset_dispatch( STARTSUBSET_N_OP, dlftop, e, cb, cntxt );
+    return cmp_subset_dispatch( STARTSUBSET_N_OP, dfltop, e, cb, cntxt );
 
   }
 
@@ -4505,26 +4505,26 @@ bool inline_subset2( SEXP e, CodeBuffer *cb, CompilerContext *cntxt ) {
   } else {
 
     int nidx = Rf_length(e) - 2;
-    dlftop dlftop;
+    dfltop dfltop;
     
     if ( nidx == 1 ) {
-      dlftop.code = VECSUBSET2_OP;
-      dlftop.rank = false;
+      dfltop.code = VECSUBSET2_OP;
+      dfltop.rank = false;
     } else if (nidx == 2) {
-      dlftop.code = MATSUBSET2_OP;
-      dlftop.rank = false;
+      dfltop.code = MATSUBSET2_OP;
+      dfltop.rank = false;
     } else {
-      dlftop.code = SUBSET2_N_OP;
-      dlftop.rank = true;
+      dfltop.code = SUBSET2_N_OP;
+      dfltop.rank = true;
     }
 
-    return cmp_subset_dispatch(STARTSUBSET2_N_OP, dlftop, e, cb, cntxt);
+    return cmp_subset_dispatch(STARTSUBSET2_N_OP, dfltop, e, cb, cntxt);
 
   }
 
 }
 
-bool cmp_subassign_dispatch(int start_op, dlftop dfltop, SEXP afun, SEXP place, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
+bool cmp_subassign_dispatch(int start_op, dfltop dfltop, SEXP afun, SEXP place, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
 
   if ( dots_or_missing(place) || has_names(place) || Rf_length(place) < 3 ) {
     cntxt_stop("cannot compile this expression", cntxt, cb_savecurloc(cb));
@@ -4559,7 +4559,7 @@ bool inline_subassign_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeBu
   } else {
 
     int nidx = Rf_length(place) - 2;
-    dlftop dfltop;
+    dfltop dfltop;
     
     if ( nidx == 1 ) {
       dfltop.code = VECSUBASSIGN_OP;
@@ -4587,20 +4587,20 @@ bool inline_subassign2_setter(SEXP afun, SEXP place, SEXP orig, SEXP call, CodeB
   } else {
 
     int nidx = Rf_length(place) - 2;
-    dlftop dlftop;
+    dfltop dfltop;
     
     if ( nidx == 1 ) {
-      dlftop.code = VECSUBASSIGN2_OP;
-      dlftop.rank = false;
+      dfltop.code = VECSUBASSIGN2_OP;
+      dfltop.rank = false;
     } else if (nidx == 2) {
-      dlftop.code = MATSUBASSIGN2_OP;
-      dlftop.rank = false;
+      dfltop.code = MATSUBASSIGN2_OP;
+      dfltop.rank = false;
     } else {
-      dlftop.code = SUBASSIGN2_N_OP;
-      dlftop.rank = true;
+      dfltop.code = SUBASSIGN2_N_OP;
+      dfltop.rank = true;
     }
 
-    return cmp_subassign_dispatch(STARTSUBASSIGN2_N_OP, dlftop, afun, place, call, cb, cntxt);
+    return cmp_subassign_dispatch(STARTSUBASSIGN2_N_OP, dfltop, afun, place, call, cb, cntxt);
 
   }
 
@@ -4631,7 +4631,7 @@ bool cmp_getter_dispatch(int start_op, int dflt_op, SEXP call, CodeBuffer * cb, 
 
 }
 
-bool cmp_subset_getter_dispatch(int start_op, dlftop dfltop, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
+bool cmp_subset_getter_dispatch(int start_op, dfltop dfltop, SEXP call, CodeBuffer * cb, CompilerContext * cntxt) {
 
   if ( dots_or_missing(call) || has_names(call) || Rf_length(call) < 3 ) {
     cntxt_stop("cannot compile this expression", cntxt, cb_savecurloc(cb));
@@ -4667,7 +4667,7 @@ bool inline_subset_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt ) {
   } else {
 
     int nidx = Rf_length(call) - 2;
-    dlftop dfltop;
+    dfltop dfltop;
 
     if ( nidx == 1 ) {
       dfltop.code = VECSUBSET_OP;
@@ -4692,7 +4692,7 @@ bool inline_subset2_getter( SEXP call, CodeBuffer *cb, CompilerContext *cntxt ) 
   } else {
 
     int nidx = Rf_length(call) - 2;
-    dlftop dfltop;
+    dfltop dfltop;
     
     if ( nidx == 1 ) {
       dfltop.code = VECSUBSET2_OP;
@@ -5153,6 +5153,10 @@ bool inline_c_call(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   }
 
 }
+
+//
+// Inlining switch
+//
 
 typedef struct {
 
