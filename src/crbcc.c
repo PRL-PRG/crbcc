@@ -4118,7 +4118,7 @@ FlattenedPlace flatten_place(SEXP place, CompilerContext *cntxt, Loc loc) {
  *    It seems somehow appropriate at this point to mention that the code in eval.c implementing the
  *    interpreter semantics starts with the following comment:
  *  
- *      /*
+ *       *
  *       * Assignments for complex LVAL specifications. This is the stuff that
  *       * nightmares are made of ...
  *     "
