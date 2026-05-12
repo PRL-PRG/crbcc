@@ -27,6 +27,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 #define END_OPCODES -1
 
