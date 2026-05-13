@@ -29,7 +29,7 @@ resolve_packages <- function() {
 
 install_missing_packages <- function(pkgs) {
 
-  missing <- pkgs[!sapply(pkgs, requireNamespace, quietly = TRUE)]  # ← was installed.packages()
+  missing <- pkgs[!sapply(pkgs, requireNamespace, quietly = TRUE)] 
 
   if (length(missing) == 0) {
     cat("[INFO] All target packages already installed and loadable.\n")
@@ -45,7 +45,7 @@ install_missing_packages <- function(pkgs) {
   cat(sprintf("[INFO] Installing %d missing/broken package(s)...\n", length(missing)))
   for (pkg in missing) {
     tryCatch({
-      utils::install.packages(pkg, dependencies = TRUE)  # ← also grab deps
+      utils::install.packages(pkg, dependencies = TRUE)
       cat(sprintf("[INFO] Installed: %s\n", pkg))
     }, error = function(e) {
       cat(sprintf("[WARN] Failed to install %s: %s\n", pkg, conditionMessage(e)))
@@ -161,8 +161,8 @@ test_package <- function(package, torture=FALSE) {
     compiled_ok <- compiled_ok + 1L
   }
 
-  grand_total_funs  <<- grand_total_funs  + compiled_ok   # ← superassign
-  grand_total_lines <<- grand_total_lines + total_lines    # ← superassign
+  grand_total_funs  <<- grand_total_funs  + compiled_ok
+  grand_total_lines <<- grand_total_lines + total_lines
 
   cat(sprintf("\n[OK] %d functions | %d lines compiled identically\n", compiled_ok, total_lines))
 }
