@@ -14,7 +14,7 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 ## Features
 
 - 1:1 compatible output with current GNU-R compiler; `cmpfun` tested on a corpus consisting of around 339,000 lines of code
-- 30x improvement on wall clock time when compiling base R packages, see Performance
+- 30x improvement on wall clock time when compiling base and recommended R packages
 
 ## Interface
 - Compile closures with `crbcc::cmpfun()`
@@ -64,17 +64,6 @@ cmpfile("script.R", "script.Rc")
 loadcmp("script.Rc", envir = .GlobalEnv)
 ```
 
-## JIT compilation
-
-`crbcc` contains identical interface to the GNU-R compiler. Taking over JIT compilation is possible by updating the namespace of the compiler package. Keep in mind this changes the `compiler::cmpfun` definition in the entire R session. Intended for experimental use only.
-
-```r
-compiler_ns <- getNamespace("compiler")
-unlockBinding("cmpfun", compiler_ns)
-compiler_ns$cmpfun <- crbcc::cmpfun
-lockBinding("cmpfun", compiler_ns)
-```
-
 ## Compiler options
 
 The compiler accepts options as a named list:
@@ -117,14 +106,3 @@ R CMD check .
 - Warning output is not guaranteed to be 1:1 with GNU R's `compiler` package.
 - `cmpfile()` currently does not support a functional `verbose` mode (the argument exists but is not implemented).
 - Saving and loading functionality is not compatible with the GNU-R compiler, since it uses an .Internal call to manage the files.
-
-## Citation
-
-Citation details are pending and will be added once the associated thesis is publicly released.
-If not available, reference the repository URL: <https://github.com/PRL-PRG/crbcc>.
-
-## Performance
-
-Benchmark results against GNU R's compiler are available at:
-
-- `utils/bench.md`

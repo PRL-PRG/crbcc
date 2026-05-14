@@ -23,7 +23,7 @@ make_macro <- function(name, value) {
 
 macros <- c()
 
-# 1. Global Metrics
+# Global Metrics
 t_crbcc_global <- sum(df_merged$time.crbcc, na.rm = TRUE)
 t_gnur_global <- sum(df_merged$time.gnur, na.rm = TRUE)
 ws_global <- t_gnur_global / t_crbcc_global
@@ -38,7 +38,7 @@ macros <- c(macros,
   ""
 )
 
-# 2. Package-Specific Metrics
+# Package-Specific Metrics
 target_pkgs <- c("base", "compiler", "stats", "utils", "tools")
 
 for (pkg in target_pkgs) {
@@ -49,7 +49,6 @@ for (pkg in target_pkgs) {
   ws <- t_g / t_c
   gs <- exp(mean(log(df_pkg$speedup), na.rm = TRUE))
   
-  # Format package name for LaTeX macro (e.g., "base" -> "Base")
   pkg_camel <- paste0(toupper(substr(pkg, 1, 1)), substr(pkg, 2, nchar(pkg)))
   
   macros <- c(macros,
@@ -62,7 +61,7 @@ for (pkg in target_pkgs) {
   )
 }
 
-# 3. Sum of the Five Specified Packages
+# Sum of the Five Specified Packages
 df_sum5 <- df_merged %>% filter(package %in% target_pkgs)
 
 t_c_5 <- sum(df_sum5$time.crbcc, na.rm = TRUE)
@@ -79,7 +78,7 @@ macros <- c(macros,
   ""
 )
 
-# 4. Worst Performing Function Speedup
+# Worst Performing Function Speedup
 worst_speedup <- min(df_merged$speedup, na.rm = TRUE)
 
 macros <- c(macros,

@@ -44,7 +44,6 @@ pkg_metrics <- df_analysis %>%
     geom_speedup = exp(mean(log(speedup), na.rm = TRUE))
   ) %>%
   mutate(
-    # Create a descriptive label for the facet
     facet_label = sprintf("%s \n Wall-clock: %.2fx \n Geom: %.2fx", 
                           toupper(package), wall_clock, geom_speedup)
   )
