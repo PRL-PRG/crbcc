@@ -34,7 +34,7 @@ PACKAGES_RECOMMENDED = c(
 
 # Define corpus here, using a
 # lightweight test for CRAN
-PACKAGES <- unique(c(PACKAGES_CRAN, PACKAGES_RECOMMENDED, PACKAGES_BASE))
+PACKAGES <- unique(c(PACKAGES_CRAN, PACKAGES_BASE, PACKAGES_RECOMMENDED))
 
 OPTIONS = list(
   optimize=2
