@@ -48,21 +48,6 @@ is_closure <- function(x) {
   is.function(x) && !is.primitive(x) && typeof(x) == "closure"
 }
 
-#' Check if Object is Compiled
-#'
-#' Internal helper function to check if an object is compiled
-#'
-#' @param fun Closure to test
-#' @return Logical value indicating if x is a closure
-#' @keywords internal
-is_compiled <- function(fun) {
-  if (!is_closure(fun)) {
-    stop("Argument 'fun' must be a closure (user-defined function)")
-  }
-  .Call(C_is_compiled, fun)
-}
-
-
 #' Compile a Generic Language Object
 #'
 #' Compiles a generic R language object (such as an expression or function) to bytecode using the C-based compiler backend.

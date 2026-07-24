@@ -411,7 +411,6 @@ SEXP gen_code(SEXP e, CompilerContext *cntxt, Loc loc);
 const char * get_assigned_var( SEXP var, CompilerContext *cntxt );
 bool may_call_browser(SEXP expr, CompilerContext *cntxt);
 bool may_call_browser_list(SEXP exprlist, CompilerContext * cntxt);
-SEXP is_compiled(SEXP fun);
 void R_init_crbcc(DllInfo* dll);
 VarInfo find_cenv_var( SEXP var, CompilerEnv * cenv );
 bool find_loc_var( SEXP var, CompilerContext * cntxt );
@@ -2770,9 +2769,6 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
 
 SEXP gen_code( SEXP e, CompilerContext * cntxt, Loc loc ) {
 
-  R_TrueValue = PROTECT( Rf_ScalarLogical(1) );
-  R_FalseValue = PROTECT( Rf_ScalarLogical(0) );
-
   CodeBuffer * cb = make_code_buffer(e, loc);
   PROTECT( cb->constant_pool_handle ); // Protect constant pool handle
 
@@ -2780,7 +2776,7 @@ SEXP gen_code( SEXP e, CompilerContext * cntxt, Loc loc ) {
 
   SEXP result = PROTECT(code_buf_code(cb, cntxt));
   
-  UNPROTECT(4); // constant_pool_handle, result, R_TrueValue, R_FalseValue
+  UNPROTECT(2); // constant_pool_handle, result
   return result;
 
 }
@@ -2868,14 +2864,6 @@ static SEXP R_bcVersion() {
   return res;
 }
 
-SEXP is_compiled(SEXP fun) {
-  bool res = 0;
-  if (TYPEOF(fun) == CLOSXP) {
-    res = (TYPEOF(R_ClosureBody(fun)) == BCODESXP);
-  }
-  return res ? R_TrueValue : R_FalseValue;
-}
-
 SEXP compile( SEXP e, SEXP env, SEXP options, SEXP srcref ) {
 
   Loc loc = { false, e, srcref };
@@ -2930,17 +2918,21 @@ SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP 
 // Registration of C functions
 static const R_CallMethodDef CallEntries[] = {
     {"cmpfun", (DL_FUNC) &cmpfun, 2},
-    {"is_compiled", (DL_FUNC) &is_compiled, 1},
     {"compile", (DL_FUNC) &compile, 4},
     {"cmpfile", (DL_FUNC) &cmpfile, 7},
     {NULL, NULL, 0}
 };
 
 void R_init_crbcc(DllInfo* dll) {
+
   R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
   R_useDynamicSymbols(dll, FALSE);
 
+  R_TrueValue = Rf_ScalarLogical(1);
+  R_FalseValue = Rf_ScalarLogical(0);
+
   BCVersion = Rf_asInteger(R_bcVersion());
+
 }
 
 #pragma endregion
