@@ -68,7 +68,7 @@ compile <- function(e, env = .GlobalEnv, options = NULL, srcref = NULL) {
 #' Compiles all top-level expressions in an R source file to bytecode and saves the result to an output file.
 #'
 #' @param infile Path to the input R source file.
-#' @param outfile Path to the output file. If missing, defaults to the input file name with extension replaced by ".Rc".
+#' @param outfile Path to the output file.
 #' @param ascii Logical; whether to write an ASCII file.
 #' @param env The top-level environment in which to evaluate expressions (default: .GlobalEnv).
 #' @param verbose Logical; Not yet implemented, print compilation progress messages.
