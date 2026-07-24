@@ -48,21 +48,6 @@ is_closure <- function(x) {
   is.function(x) && !is.primitive(x) && typeof(x) == "closure"
 }
 
-#' Check if Object is Compiled
-#'
-#' Internal helper function to check if an object is compiled
-#'
-#' @param fun Closure to test
-#' @return Logical value indicating if x is a closure
-#' @keywords internal
-is_compiled <- function(fun) {
-  if (!is_closure(fun)) {
-    stop("Argument 'fun' must be a closure (user-defined function)")
-  }
-  .Call(C_is_compiled, fun)
-}
-
-
 #' Compile a Generic Language Object
 #'
 #' Compiles a generic R language object (such as an expression or function) to bytecode using the C-based compiler backend.
@@ -83,7 +68,7 @@ compile <- function(e, env = .GlobalEnv, options = NULL, srcref = NULL) {
 #' Compiles all top-level expressions in an R source file to bytecode and saves the result to an output file.
 #'
 #' @param infile Path to the input R source file.
-#' @param outfile Path to the output file. If missing, defaults to the input file name with extension replaced by ".Rc".
+#' @param outfile Path to the output file.
 #' @param ascii Logical; whether to write an ASCII file.
 #' @param env The top-level environment in which to evaluate expressions (default: .GlobalEnv).
 #' @param verbose Logical; Not yet implemented, print compilation progress messages.
