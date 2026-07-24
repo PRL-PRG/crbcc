@@ -1,3 +1,8 @@
+> [!WARNING]
+> This branch is used for experimenting with optimizations on the final bytecode object.
+> The changes are not 1:1 compatible with the original compiler and (for now) untested!
+> For a stable version checkout to the main branch. 
+
 # crbcc
 
 `crbcc` is an R package that compiles R code to bytecode using a C implementation.
