@@ -1,5 +1,7 @@
 # crbcc
 
+[![CRAN status](https://www.r-pkg.org/badges/version/crbcc)](https://CRAN.R-project.org/package=crbcc)
+
 `crbcc` is an R package that compiles R code to bytecode using a C implementation.
 It is intended as a fast, drop-in alternative to the base `compiler` package, for cases in which
 a reduced compilation time could be beneficial, eg. in research.
@@ -28,6 +30,12 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 - Build toolchain for compiling native C code
 
 ## Install
+
+### From CRAN
+
+```R
+install.packages("crbcc")
+```
 
 ### From source (local checkout)
 
