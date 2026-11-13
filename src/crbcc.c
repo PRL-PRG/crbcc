@@ -29,6 +29,8 @@
 #include <stdarg.h>
 #include <stdbool.h>
 
+#include "hash.h"
+
 #define END_OPCODES -1
 
 static SEXP R_TrueValue;
@@ -256,6 +258,9 @@ typedef struct CodeBuffer {
   SEXP constant_pool;             // R List object
   int const_count;                // Number of constants in the pool
   int const_capacity;             // Capacity of the constant pool
+  unsigned int *const_hash;       // Hash of each const pool entry
+  int *const_table;               // Hash table of pool indices, -1 is an empty slot
+  int const_table_size;           // Number of slots in const_table, a power of 2
 
   // Label management
   struct LabelTable label_table;
@@ -267,11 +272,14 @@ typedef struct CodeBuffer {
   SEXP current_expr;
   SEXP current_srcref;
 
+  int expr_const_idx;              // Pool index of the last current_expr, -1 if none
+  int srcref_const_idx;            // Pool index of the last current_srcref, -1 if none
+
   bool srcref_tracking_on;         // Is source reference tracking on
   bool expr_tracking_on;           // Is expression tracking on
 
   struct SwitchPatch *switch_patches;    // Linked list head of switch statement patches
-  struct SwitchPatch *patch_tail;         // O(1) append
+  struct SwitchPatch *patch_tail;        // O(1) append
 
 } CodeBuffer;
 
@@ -280,12 +288,12 @@ typedef struct SwitchPatch {
   bool has_char_labels;
   int char_code_offset;            // Where to patch the char INTSXP index
   int n_char;                      // Length of char labels array
-  int *char_labels;               // Array of label IDs (with default at the end)
+  int *char_labels;                // Array of label IDs (with default at the end)
 
   // Numeric Labels Data (Always used)
   int num_code_offset;             // Where to patch the num INTSXP index
   int n_num;                       // Length of num labels array
-  int *num_labels;                // Array of label IDs (with default at the end)
+  int *num_labels;                 // Array of label IDs (with default at the end)
 
   struct SwitchPatch *next;
 
@@ -2163,6 +2171,8 @@ CodeBuffer *make_code_buffer(SEXP preseed, Loc loc) {
 
   cb->constant_pool = R_NilValue; // Constant pool is initialized on first insertion
   cb->const_count = 0;
+  cb->expr_const_idx = -1;
+  cb->srcref_const_idx = -1;
 
   cb->switch_patches = NULL;
   cb->patch_tail = NULL;
@@ -2414,6 +2424,20 @@ void cmp_const_arg(SEXP a, CodeBuffer *cb, CompilerContext *cntxt) {
   }
 }
 
+/*
+ * cb_putconst with a one-entry cache. If the cached pool slot holds the same
+ * object, cb_putconst returns that index: the pool only grows, and no earlier
+ * entry is identical to an entry.
+ */
+static int cb_putconst_cached(CodeBuffer *cb, SEXP item, int *cache) {
+
+  if (*cache >= 0 && VECTOR_ELT(cb->constant_pool, *cache) == item)
+    return *cache;
+
+  *cache = cb_putconst(cb, item);
+  return *cache;
+}
+
 void cb_putcode(CodeBuffer *cb, ...) {
 
   va_list args;
@@ -2457,8 +2481,8 @@ void cb_putcode(CodeBuffer *cb, ...) {
 
   int srcrefpatchend = cb->code_count;
 
-  int expression_idx = cb->expr_tracking_on ? PUTCONST(cb->current_expr) : 0;
-  int srcref_idx = cb->srcref_tracking_on ? PUTCONST(cb->current_srcref) : 0;
+  int expression_idx = cb->expr_tracking_on ? cb_putconst_cached(cb, cb->current_expr, &cb->expr_const_idx) : 0;
+  int srcref_idx = cb->srcref_tracking_on ? cb_putconst_cached(cb, cb->current_srcref, &cb->srcref_const_idx) : 0;
 
   for (int i = srcrefpatchstart; i < srcrefpatchend; i++) {
 
@@ -2476,6 +2500,39 @@ void cb_putcode(CodeBuffer *cb, ...) {
   }
 }
 
+/*
+ * Constant pool optimization.
+ *
+ * R do_putconst returns the index of the first pool entry that is identical to
+ * the constant. If no entry is identical, do_putconst adds the constant at the
+ * end. This search is linear, thus the compile time of a function is
+ * quadratic in the size of its pool.
+ *
+ * We have two shortcuts that give the same index as the linear search:
+ *  - cb_putconst_cached keeps the last index of current_expr and of
+ *    current_srcref. cb_putcode puts these two items after each instruction.
+ *    If the pool entry at that index is the same object as the item, the
+ *    index is correct, because no entry before it is identical to it.
+ *  - cb_putconst hashes the constant pool indices keeping the candidates in a
+ *    hash table. const_hash keeps the hash of each pool entry. const_table
+ *    keeps the pool indices, with linear probing.
+ */
+static void cb_const_table_resize(CodeBuffer *cb, int size) {
+
+  cb->const_table = (int *) R_alloc(size, sizeof(int));
+  cb->const_table_size = size;
+
+  for (int i = 0; i < size; i++)
+    cb->const_table[i] = -1;
+
+  for (int j = 0; j < cb->const_count; j++) {
+    int i = cb->const_hash[j] & (size - 1);
+    while (cb->const_table[i] >= 0)
+      i = (i + 1) & (size - 1);
+    cb->const_table[i] = j;
+  }
+}
+
 int cb_putconst(CodeBuffer *cb, SEXP item) {
 
   // Initialize constant pool if it doesn't exist
@@ -2489,28 +2546,36 @@ int cb_putconst(CodeBuffer *cb, SEXP item) {
     SET_VECTOR_ELT(cb->constant_pool_handle, 0, cb->constant_pool);
 
     UNPROTECT(1);
+
+    cb->const_hash = (unsigned int *) R_alloc(cb->const_capacity, sizeof(unsigned int));
+    cb_const_table_resize(cb, 2 * cb->const_capacity);
   }
 
-  // Check if item already exists in pool, try pointers only first
-  for (int j = 0; j < cb->const_count; j++) {
+  /*
+   * Find the entry with the lowest index that is identical to item. This is
+   * the same entry that do_putconst in GNU R finds.
+   *
+   * All entries with the same hash have the same home slot. The table never
+   * removes an entry, and it adds the entries in the order of their index
+   * (also in cb_const_table_resize). Thus each entry is after the entries
+   * with the same hash and a lower index. The first identical entry that the
+   * probe finds has the lowest index.
+   */
+  unsigned int h = cp_hash(item);
+  int mask = cb->const_table_size - 1;
+
+  // probe the hash table, looking for item with hash h
+  for (int i = h & mask; cb->const_table[i] >= 0; i = (i + 1) & mask) {
+    int j = cb->const_table[i];
+
+    if (cb->const_hash[j] != h)
+      continue;
 
     SEXP compare = VECTOR_ELT(cb->constant_pool, j);
 
-    if (item == compare)
+    // 16 - take closure environments into account, same as do_putconst in internals
+    if (item == compare || R_compute_identical(item, compare, 16))
       return j;
-  }
-
-  // Proper identity check
-  for (int j = cb->const_count - 1; j >= 0; j--) {
-    SEXP compare = VECTOR_ELT(cb->constant_pool, j);
-
-    /* 16 - take closure environments into account, same as do_putconst in internals */
-    if (R_compute_identical(item, compare, 16)) {
-
-      // Found so return the existing index immediately,
-      // Do not increment const_count
-      return j;
-    }
   }
 
   // Resize constant pool if full
@@ -2525,22 +2590,32 @@ int cb_putconst(CodeBuffer *cb, SEXP item) {
       SET_VECTOR_ELT(new_pool, i, VECTOR_ELT(cb->constant_pool, i));
     }
 
-    /*
-     * NOTE: Link the constant pool to its handle (protects agains GC)
-     * Protection of constant pool then stems from protection of the handle,
-     * which is protected in gen_code. This way the new vector can be swapped.
-     * In the future maybe make the constant pool a C SEXP array?
-    */
+    // make sure GC does not eat the new pool
     SET_VECTOR_ELT(cb->constant_pool_handle, 0, new_pool);
 
     cb->constant_pool = new_pool;
     cb->const_capacity = new_cap;
     UNPROTECT(1); // new_pool
+
+    unsigned int *new_hash = (unsigned int *) R_alloc(new_cap, sizeof(unsigned int));
+    memcpy(new_hash, cb->const_hash, cb->const_count * sizeof(unsigned int));
+    cb->const_hash = new_hash;
   }
 
   SET_VECTOR_ELT(cb->constant_pool, cb->const_count, item);
   int new_idx = cb->const_count;
+  cb->const_hash[new_idx] = h;
   cb->const_count++;
+
+  // Keep the hash table at most half full
+  if (2 * cb->const_count > cb->const_table_size) {
+    cb_const_table_resize(cb, 2 * cb->const_table_size);
+  } else {
+    int i = h & mask;
+    while (cb->const_table[i] >= 0)
+      i = (i + 1) & mask;
+    cb->const_table[i] = new_idx;
+  }
 
   return new_idx;
 }
