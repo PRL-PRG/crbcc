@@ -1,0 +1,49 @@
+---
+# Style of src/*.c and src/*.h. This file needs clang-format 19 or later.
+# The code is not fully consistent. This file follows the style of most of
+# the code: f(x), T *p, 2 spaces of indent, braces on the same line.
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 2
+UseTab: Never
+
+# Keep the line breaks of the author. Some lines have more than 120
+# characters, and a column limit packs the string tables into columns.
+ColumnLimit: 0
+
+# With ColumnLimit 0, clang-format reads "INTEGER(x)[i] = v;" as a macro
+# statement and puts "[i] = v;" on a new line. Declare the R accessors as
+# expressions to prevent this.
+Macros:
+  - INTEGER(x)=x
+  - REAL(x)=x
+  - LOGICAL(x)=x
+  - COMPLEX(x)=x
+  - RAW(x)=x
+
+BreakBeforeBraces: Attach
+IndentCaseLabels: true
+PointerAlignment: Right
+SpaceAfterCStyleCast: true
+SpaceBeforeParens: ControlStatements
+SpacesInParens: Never
+Cpp11BracedListStyle: false
+AlignEscapedNewlines: DontAlign
+
+# Keep the column of trailing comments, for example in the structs.
+AlignTrailingComments:
+  Kind: Leave
+
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortFunctionsOnASingleLine: None
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+
+# clang-format always removes an empty line before a closing brace.
+KeepEmptyLines:
+  AtStartOfBlock: true
+  AtStartOfFile: true
+MaxEmptyLinesToKeep: 2
+
+SortIncludes: Never
+ReflowComments: false
