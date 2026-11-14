@@ -14,6 +14,9 @@ Encoding: UTF-8
 LazyData: true
 RoxygenNote: 7.1.1
 Depends: R (>= 4.5.0)
+Imports:
+    stats,
+    utils
 Suggests:
     compiler
 URL: https://github.com/PRL-PRG/crbcc

@@ -1,0 +1,590 @@
+---
+title: "crbcc benchmarks"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    df_print: kable
+params:
+  csv: "results.csv"
+  ## If this value is not empty, the report writes two files for the README
+  ## of crbcc to this directory: the figure closures-time-by-size.png and the
+  ## shields.io badge speedup.json.
+  assets: ""
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
+                      fig.width = 9, dev = "png", dpi = 120)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+glue <- glue::glue
+
+## The categorical slots 1-2 of the dataviz reference palette, in a fixed order.
+COL   <- c(gnur = "#2a78d6", crbcc = "#eb6834")
+INK   <- "#0b0b0b"  # primary text
+INK2  <- "#52514e"  # secondary text, axes
+GRID  <- "#e4e3df"  # grid lines
+RANGE <- "#c3c2b7"  # line between the compilers in a dot plot
+COMPILERS <- names(COL)
+
+## These lists are the same as in crbcc_bench.py.
+BASE <- c("base", "compiler", "graphics", "grDevices", "grid", "methods",
+          "parallel", "splines", "stats", "stats4", "tools", "utils")
+RECOMMENDED <- c("MASS", "lattice", "Matrix", "nlme", "survival", "boot",
+                 "class", "cluster", "codetools", "foreign", "KernSmooth",
+                 "mgcv", "nnet", "rpart", "spatial")
+
+## The compilers of each suite. The -fn suites have no compiler column.
+SUITES <- list(closures = COMPILERS, `closures-fn` = "",
+               install = COMPILERS, `install-fn` = "")
+
+fmt   <- function(x, digits = 1) formatC(x, format = "f", digits = digits, big.mark = ",")
+pct   <- function(x) paste0(fmt(100 * x, 0), "%")
+times <- function(x, digits = 1) paste0(fmt(x, digits), "x")
+## Returns "1 run" or "2 runs".
+count <- function(n, noun) paste(n, if (n == 1) noun else paste0(noun, "s"))
+gmean <- function(x) { x <- x[is.finite(x) & x > 0]; exp(mean(log(x))) }
+group_of <- function(p) case_when(p %in% BASE ~ "base", p %in% RECOMMENDED ~ "recommended",
+                                  TRUE ~ "CRAN")
+## Writes markdown with {} expressions. Inline `r` code does not work in asis chunks.
+md <- function(...) cat(glue(..., .envir = parent.frame()), "\n\n", sep = "")
+## Returns the path of a file in params$assets. If params$assets is empty, returns NULL.
+asset <- function(name) {
+  if (!nzchar(params$assets)) return(NULL)
+  dir.create(params$assets, showWarnings = FALSE, recursive = TRUE)
+  file.path(params$assets, name)
+}
+
+theme_set(theme_minimal(base_size = 11) + theme(
+  text = element_text(colour = INK2),
+  axis.text = element_text(colour = INK2),
+  axis.text.y = element_text(colour = INK),
+  legend.text = element_text(colour = INK),
+  strip.text = element_text(colour = INK, hjust = 0, size = 11),
+  plot.subtitle = element_text(colour = INK2),
+  legend.position = "top", legend.justification = "left", legend.title = element_blank(),
+  panel.grid.major = element_line(colour = GRID, linewidth = 0.3),
+  panel.grid.minor = element_blank(),
+  plot.background = element_rect(fill = "white", colour = NA)))
+compiler_fill   <- scale_fill_manual(values = COL, breaks = COMPILERS)
+compiler_colour <- scale_colour_manual(values = COL, breaks = COMPILERS)
+log_x <- function(...) scale_x_log10(labels = scales::label_comma(), ...)
+log_y <- function(...) scale_y_log10(labels = scales::label_comma(), ...)
+
+# Read the report ---------------------------------------------------------
+
+lines <- readLines(params$csv)
+meta  <- sub("^# ", "", grep("^#", lines, value = TRUE))
+raw   <- read.csv(text = grep("^#", lines, value = TRUE, invert = TRUE),
+                  stringsAsFactors = FALSE)
+if (!"fn" %in% names(raw)) raw$fn <- NA
+raw <- raw |>
+  filter(suite %in% names(SUITES)) |>
+  mutate(failure  = ifelse(is.na(failure), "", as.character(failure)),
+         compiler = ifelse(is.na(compiler), "", as.character(compiler)),
+         fn       = as.character(fn),
+         part     = sub("-.*", "", suite))  # closures or install
+present <- intersect(names(SUITES), unique(raw$suite))
+if (length(present) == 0) stop("The report has no samples of the crbcc_bench.py suites.")
+
+## A run with a failure and no samples has no row in the CSV. The expected
+## runs of a suite are the packages of its part, for each compiler of the suite.
+expected <- bind_rows(lapply(present, function(s)
+  expand_grid(suite = s, benchmark = unique(raw$benchmark[raw$part == sub("-.*", "", s)]),
+              compiler = SUITES[[s]])))
+failed <- bind_rows(
+  raw |> filter(failure != "") |> distinct(suite, benchmark, compiler, failure),
+  expected |>
+    anti_join(distinct(raw, suite, benchmark, compiler), by = c("suite", "benchmark", "compiler")) |>
+    mutate(failure = "no samples in the CSV"))
+
+## The analysis does not use a package that has a run with a failure in the
+## same part.
+d <- raw |>
+  filter(failure == "", !(warmup %in% c("True", TRUE))) |>
+  anti_join(failed |> distinct(part = sub("-.*", "", suite), benchmark), by = c("part", "benchmark"))
+has <- function(s) any(d$suite == s)
+
+## Returns the median of the runs, with one row for each package and
+## compiler. A run can write more than one sample of a metric, one for each R
+## process of R CMD INSTALL. Then the value of the run is the sum of its
+## samples.
+pkg_metric <- function(s, m, f = median) d |>
+  filter(suite == s, metric == m) |>
+  group_by(benchmark, compiler, run) |> summarise(value = sum(value), .groups = "drop") |>
+  group_by(benchmark, compiler) |> summarise(value = f(value), .groups = "drop")
+
+## Returns the same values, with one column for each compiler and one row
+## for each package in pkgs. A missing value is 0, because a package without
+## src/ has no 'native' samples.
+pkg_wide <- function(s, m, pkgs, f = median)
+  expand_grid(benchmark = pkgs, compiler = COMPILERS) |>
+  left_join(pkg_metric(s, m, f), by = c("benchmark", "compiler")) |>
+  mutate(value = coalesce(value, 0)) |>
+  pivot_wider(names_from = compiler, values_from = value)
+
+## Returns the packages of a suite, in the order of the GNU R time. The
+## longest time is first.
+pkg_order <- function(s, m) pkg_metric(s, m) |>
+  filter(compiler == "gnur") |> arrange(desc(value)) |> pull(benchmark)
+
+## Returns one row for each closure of a -fn suite: the package, the closure,
+## the size, and the time of one compilation (s) for each compiler.
+fn_table <- function(s, pkgs) d |>
+  filter(suite == s, benchmark %in% pkgs) |>
+  select(benchmark, fn, metric, value) |>
+  pivot_wider(names_from = metric, values_from = value) |>
+  transmute(benchmark, fn, size, gnur = time_gnur, crbcc = time_crbcc) |>
+  filter(!is.na(gnur), !is.na(crbcc))
+
+## Makes a dot plot of x (benchmark, compiler, value), with the packages in
+## the order of pkgs.
+dotplot <- function(x, pkgs, xlab) {
+  x <- mutate(x, benchmark = factor(benchmark, rev(pkgs)))
+  ggplot(x, aes(value, benchmark)) +
+    geom_line(aes(group = benchmark), colour = RANGE, linewidth = 0.9) +
+    geom_point(aes(fill = compiler), shape = 21, colour = "white", size = 3.2, stroke = 0.8) +
+    compiler_fill + log_x() + labs(x = xlab, y = NULL)
+}
+
+# Function size -----------------------------------------------------------
+
+## Size classes in AST nodes, by powers of 10.
+SIZE_BREAKS <- c(1, 10, 100, 1e3, 1e4, Inf)
+SIZE_LABELS <- c("1-9", "10-99", "100-999", "1,000-9,999", ">= 10,000")
+size_class  <- function(size) cut(size, SIZE_BREAKS, SIZE_LABELS, right = FALSE)
+
+## Returns the median time of each compiler and the geometric mean of the
+## speedups for each size class.
+size_table <- function(fx) fx |>
+  group_by(`size (AST nodes)` = size_class(size)) |>
+  summarise(closures = fmt(n(), 0),
+            `gnur (us)` = fmt(median(gnur) * 1e6),
+            `crbcc (us)` = fmt(median(crbcc) * 1e6),
+            `gnur / crbcc` = times(gmean(gnur / crbcc)))
+
+size_time_plot <- function(fx) {
+  long <- fx |>
+    pivot_longer(all_of(COMPILERS), names_to = "compiler", values_to = "time") |>
+    mutate(compiler = factor(compiler, COMPILERS))
+  mid <- long |>
+    group_by(compiler, class = size_class(size)) |>
+    summarise(size = median(size), time = median(time), .groups = "drop")
+  ggplot(long, aes(size, time * 1e6, colour = compiler)) +
+    geom_point(size = 0.9, alpha = 0.4, stroke = 0) +
+    geom_line(data = mid, linewidth = 0.9) +
+    geom_point(data = mid, aes(fill = compiler), shape = 21, colour = "white",
+               size = 3, stroke = 0.8) +
+    compiler_colour + compiler_fill + log_x() + log_y() +
+    guides(colour = guide_legend(override.aes = list(alpha = 1))) +
+    labs(x = "closure size (AST nodes, log scale)", y = "time of one compilation (us, log scale)",
+         subtitle = "The points are closures. The line is the median of the size class.")
+}
+
+size_speedup_plot <- function(fx) {
+  x <- fx |> mutate(speedup = gnur / crbcc) |> filter(is.finite(speedup), speedup > 0)
+  mid <- x |>
+    group_by(class = size_class(size)) |>
+    summarise(size = median(size), speedup = gmean(speedup), .groups = "drop")
+  ggplot(x, aes(size, speedup)) +
+    geom_point(size = 0.9, alpha = 0.45, stroke = 0, colour = COL[["crbcc"]]) +
+    geom_line(data = mid, colour = INK, linewidth = 0.9) +
+    geom_point(data = mid, colour = INK, size = 2.5) +
+    log_x() + log_y() +
+    labs(x = "closure size (AST nodes, log scale)", y = "speedup, gnur / crbcc (log scale)",
+         subtitle = "The points are closures. The line is the geometric mean of the size class.")
+}
+
+size_by_package <- function(fx, pkgs) fx |>
+  group_by(package = benchmark) |>
+  summarise(closures = fmt(n(), 0), `median size` = fmt(median(size), 0),
+            largest = fmt(max(size), 0),
+            `gnur / crbcc total` = times(sum(gnur) / sum(crbcc)),
+            `gnur / crbcc geo. mean` = times(gmean(gnur / crbcc))) |>
+  arrange(match(package, pkgs))
+
+# Closures ----------------------------------------------------------------
+
+## The chunk option fig.height uses pkgs and ipkgs, also if eval is FALSE.
+pkgs <- ipkgs <- character()
+
+has_closures <- has("closures")
+has_fn       <- has("closures-fn")
+if (has_closures || has_fn)
+  pkgs <- if (has_closures) pkg_order("closures", "compile") else unique(d$benchmark[d$suite == "closures-fn"])
+if (has_closures) {
+  time <- pkg_wide("closures", "compile", pkgs) |> mutate(across(all_of(COMPILERS), ~ .x * 1000))
+  heap <- pkg_wide("closures", "heap", pkgs)
+  rss  <- pkg_wide("closures", "max_rss", pkgs) |> mutate(across(all_of(COMPILERS), ~ .x / 1024))
+  tot  <- colSums(time[COMPILERS])
+  runs <- d |> filter(suite == "closures") |> group_by(compiler) |> summarise(n = n_distinct(run))
+}
+if (has_fn) fx <- fn_table("closures-fn", pkgs)
+
+# Install -----------------------------------------------------------------
+
+has_install <- has("install")
+has_ifn     <- has("install-fn")
+if (has_install || has_ifn)
+  ipkgs <- if (has_install) pkg_order("install", "elapsed") else unique(d$benchmark[d$suite == "install-fn"])
+if (has_install) {
+  elapsed  <- pkg_wide("install", "elapsed", ipkgs)
+  bytecode <- pkg_wide("install", "bytecode", ipkgs)
+  native   <- pkg_wide("install", "native", ipkgs)
+  itot     <- colSums(elapsed[COMPILERS])
+  itot_bc  <- colSums(bytecode[COMPILERS])
+  iruns <- d |> filter(suite == "install") |> group_by(compiler) |> summarise(n = n_distinct(run))
+}
+if (has_ifn) ifx <- fn_table("install-fn", ipkgs)
+```
+
+## Input
+
+```{asis}
+The report reads the `--csv` report of `crbcc_bench.py`. The docstring of
+`crbcc_bench.py` gives the columns, the suites and the metrics. If the CSV
+does not have the suites of a section, the report does not show that section.
+
+| Section | Suite | Metrics |
+|---|---|---|
+| [Correctness](#correctness) | `closures-fn`, `install-fn` | the runs with a failure |
+| [Closures](#closures): compile time, memory | `closures` | `compile`, `heap`, `max_rss` |
+| [Closures](#closures): function size | `closures-fn` | `size`, `time_gnur`, `time_crbcc` |
+| [Installation](#installation): installation time | `install` | `elapsed`, `bytecode`, `native` |
+| [Installation](#installation): package size, function size | `install`, `install-fn` | `bytecode`, `size`, `time_gnur`, `time_crbcc` |
+
+The two compilers are `gnur` (`compiler::cmpfun` of GNU R) and `crbcc`
+(`crbcc::cmpfun`). The size of a closure is the number of AST nodes of its
+body and of the default values of its formals (`crbcc:::function_size`).
+The time of one compilation of a closure (`crbcc:::compile_time`) is the
+median time of a batch of compilations, divided by the number of
+compilations in the batch. A batch takes a minimum of 100 us. The speedup of a group of closures is
+the geometric mean of the speedups of the closures.
+
+To make this report again, run these commands:
+
+    crbcc/inst/benchmarks/crbcc_bench.py --r R-4.6.2/bin/R --csv results.csv
+    Rscript -e 'rmarkdown::render("crbcc/inst/benchmarks/crbcc_bench.Rmd",
+                                  output_dir = ".", knit_root_dir = getwd())'
+```
+
+```{r input-runs, results = "asis"}
+if (length(pkgs) > 0) {
+  groups <- paste(sprintf("%d %s", table(group_of(pkgs)), names(table(group_of(pkgs)))),
+                  collapse = ", ")
+  md("Closures: {count(length(pkgs), 'package')} ({groups}).")
+}
+if (has_closures)
+  md("The suite closures has {count(max(runs$n), 'run')} for each package and compiler.")
+if (length(ipkgs) > 0)
+  md("Installation: {count(length(ipkgs), 'package')}.")
+if (has_install)
+  md("The suite install has {count(max(iruns$n), 'run')} for each package and compiler.")
+md("The tables and figures show the median of the runs.")
+```
+
+## Correctness
+
+```{asis}
+The suites `closures-fn` and `install-fn` compile each closure with GNU R
+and crbcc, and compare the results with `crbcc:::identical_strict`
+(`identical()` with all strict flags, as `tests/compare.R`). If the results
+of a closure are different, the run is a failure. `closures-fn` uses the closures
+of the namespace. `install-fn` uses all closures that R compiles during the
+installation, also the S4 methods.
+```
+
+```{r correctness, results = "asis"}
+for (s in intersect(c("closures-fn", "install-fn"), present)) {
+  ok <- d |> filter(suite == s, metric == "size")
+  n  <- n_distinct(expected$benchmark[expected$suite == s])
+  md("- `{s}`: {n_distinct(ok$benchmark)} of {n} packages have no failure. ",
+     "The results of {fmt(nrow(ok), 0)} closures are the same as GNU R.")
+}
+if (!any(c("closures-fn", "install-fn") %in% present))
+  md("The report has no samples of the suites `closures-fn` and `install-fn`.")
+if (nrow(failed) > 0) {
+  md("**Runs with a failure.** The analysis of a part (closures or installation) ",
+     "does not include the packages that have a run with a failure in that part.")
+  print(knitr::kable(failed, row.names = FALSE))
+}
+```
+
+```{asis, echo = has_closures || has_fn}
+## Closures
+
+The suites `closures` and `closures-fn` compile the R code of all closures
+of a package namespace, not the byte code of the installed package.
+```
+
+```{asis, echo = has_closures}
+### Compile time
+
+The suite `closures` measures the time to compile all closures of a
+package. Each compiler has a new R process.
+```
+
+```{r closures-summary, eval = has_closures}
+tibble(
+  compiler = COMPILERS,
+  `compile (s)` = fmt(tot / 1000, 2),
+  `vs gnur` = times(tot["gnur"] / tot),
+  `heap median (MB)` = fmt(sapply(heap[COMPILERS], median)),
+  `heap max (MB)` = fmt(sapply(heap[COMPILERS], max)),
+  `RSS median (MB)` = fmt(sapply(rss[COMPILERS], median)),
+  `RSS max (MB)` = fmt(sapply(rss[COMPILERS], max)))
+```
+
+```{r closures-summary-text, results = "asis", eval = has_closures}
+md("`crbcc` needs {fmt(tot['crbcc'] / 1000, 2)} s and `gnur` needs ",
+   "{fmt(tot['gnur'] / 1000, 1)} s. In total, `crbcc` is ",
+   "{times(tot['gnur'] / tot['crbcc'])} faster.")
+if (!is.null(f <- asset("speedup.json")))
+  writeLines(sprintf('{"schemaVersion": 1, "label": "compile speedup", "message": "%s faster than GNU R", "color": "blue"}',
+                     times(tot["gnur"] / tot["crbcc"])), f)
+```
+
+```{r closures-time-plot, eval = has_closures, fig.height = 1.5 + 0.3 * length(pkgs)}
+time |>
+  pivot_longer(all_of(COMPILERS), names_to = "compiler") |>
+  dotplot(pkgs, "compile time of all closures (ms, log scale)")
+```
+
+```{r closures-time-table, eval = has_closures}
+spread <- function(k) {
+  w <- function(f) pkg_wide("closures", "compile", pkgs, f)[[k]]
+  (w(max) - w(min)) / w(median)
+}
+tibble(package = pkgs, group = group_of(pkgs),
+       `gnur (ms)` = fmt(time$gnur),
+       `crbcc (ms)` = fmt(time$crbcc, 2),
+       `gnur / crbcc` = times(time$gnur / time$crbcc),
+       `gnur spread` = pct(spread("gnur")),
+       `crbcc spread` = pct(spread("crbcc")))
+```
+
+```{asis, echo = has_closures}
+The column "spread" is (max - min) / median of the runs of the compiler.
+
+### Memory
+
+- **heap**: the maximum R heap during the compilation, minus the heap
+  before it. The value comes from `gc()` "max used" (Ncells + Vcells). R
+  records this value at the start of each garbage collection. Thus it
+  includes garbage that R did not collect yet. For a compiler that makes
+  much garbage, the value is near the GC trigger, not near the live data.
+- **RSS**: the maximum resident set size of the R process. It includes R,
+  the loaded packages and the compiler.
+
+crbcc keeps its work buffers on the `R_alloc` stack. When `cmpfun` returns,
+these buffers become garbage. Thus a high heap value of crbcc shows when R
+collects the garbage, not how much live data crbcc has.
+```
+
+```{r memory-plot, eval = has_closures, fig.height = 1.5 + 0.3 * length(pkgs)}
+bind_rows(heap |> mutate(metric = "maximum R heap during the compilation (MB)"),
+          rss |> mutate(metric = "maximum RSS of the R process (MB)")) |>
+  pivot_longer(all_of(COMPILERS), names_to = "compiler") |>
+  dotplot(pkgs, "MB (log scale)") +
+  facet_wrap(~ metric, scales = "free_x")
+```
+
+```{r memory-table, eval = has_closures}
+tibble(package = pkgs,
+       `heap gnur (MB)` = fmt(heap$gnur), `heap crbcc (MB)` = fmt(heap$crbcc),
+       `RSS gnur (MB)` = fmt(rss$gnur), `RSS crbcc (MB)` = fmt(rss$crbcc))
+```
+
+```{asis, echo = has_fn}
+### Function size
+
+This section shows the time of one compilation of each closure of the
+namespace (suite `closures-fn`), by the size of the closure. One R process
+compiles each closure with the two compilers.
+```
+
+```{r fn-intro, results = "asis", eval = has_fn}
+big <- slice_max(fx, size, n = 1, with_ties = FALSE)
+md("There are {fmt(nrow(fx), 0)} closures. The median size is {fmt(median(fx$size), 0)} ",
+   "nodes, and the largest closure (`{big$benchmark}::{big$fn}`) has {fmt(big$size, 0)} nodes.")
+```
+
+```{r fn-table, eval = has_fn}
+size_table(fx)
+```
+
+```{r fn-time-plot, eval = has_fn, fig.height = 6}
+p <- size_time_plot(fx)
+if (!is.null(f <- asset("closures-time-by-size.png")))
+  ggsave(f, p, width = 9, height = 5.5, dpi = 120, bg = "white")
+p
+```
+
+```{r fn-speedup-plot, eval = has_fn, fig.height = 4.5}
+size_speedup_plot(fx)
+```
+
+```{asis, echo = has_fn}
+#### By package
+
+The column "total" is the sum of the times of the closures with `gnur`,
+divided by the sum with `crbcc`.
+```
+
+```{r fn-package, eval = has_fn}
+size_by_package(fx, pkgs)
+```
+
+```{asis, echo = has_fn}
+#### Slowest closures
+
+The 10 closures with the longest compile time of `crbcc`:
+```
+
+```{r fn-slowest, eval = has_fn}
+fn_rows <- function(x) transmute(x,
+  closure = paste0(benchmark, "::", fn), size = fmt(size, 0),
+  `gnur (us)` = fmt(gnur * 1e6), `crbcc (us)` = fmt(crbcc * 1e6),
+  `gnur / crbcc` = times(gnur / crbcc))
+fx |> slice_max(crbcc, n = 10, with_ties = FALSE) |> fn_rows()
+```
+
+```{asis, echo = has_fn}
+The 10 closures with the smallest speedup of `crbcc` over GNU R:
+```
+
+```{r fn-worst, eval = has_fn}
+fx |> slice_min(gnur / crbcc, n = 10, with_ties = FALSE) |> fn_rows()
+```
+
+```{asis, echo = has_install || has_ifn}
+## Installation
+
+The suites `install` and `install-fn` install each package from its source
+with `R CMD INSTALL`. The profile file `inst/r-cmd-install-hook.R`
+(`R_PROFILE_USER`) replaces `compiler:::tryCmpfun`, the function that R
+uses to compile each closure of the package.
+```
+
+```{asis, echo = has_install}
+### Installation time
+
+The suite `install` runs `R CMD INSTALL` one time for each compiler.
+
+- **elapsed**: the wall time of `R CMD INSTALL`.
+- **bytecode**: the time in the byte-code compiler, for all closures of the
+  package.
+- **native**: the time to compile and link `src/`. For a package without
+  `src/`, the value is 0.
+```
+
+```{r install-summary, eval = has_install}
+tibble(compiler = COMPILERS,
+       `elapsed (s)` = fmt(itot, 1),
+       `vs gnur` = times(itot["gnur"] / itot, 2),
+       `bytecode (s)` = fmt(itot_bc, 2),
+       `bytecode vs gnur` = times(itot_bc["gnur"] / itot_bc),
+       `native (s)` = fmt(colSums(native[COMPILERS]), 1),
+       `bytecode share` = pct(itot_bc / itot))
+```
+
+```{r install-summary-text, results = "asis", eval = has_install}
+md("With `crbcc`, the installation of all packages is {times(itot['gnur'] / itot['crbcc'], 2)} ",
+   "faster than with GNU R ({fmt(itot['crbcc'], 1)} s, not {fmt(itot['gnur'], 1)} s). ",
+   "The byte-code compilation is {pct(itot_bc['gnur'] / itot['gnur'])} of the installation ",
+   "time with GNU R and {pct(itot_bc['crbcc'] / itot['crbcc'])} with `crbcc`. The other ",
+   "time of R CMD INSTALL is the same for the two compilers. In this time, R parses the ",
+   "code, makes the lazy-load database and the help pages, and loads the package to test it.")
+```
+
+```{r install-time-plot, eval = has_install, fig.height = 1.5 + 0.3 * length(ipkgs)}
+m <- c("elapsed time of R CMD INSTALL (s)", "byte-code compile time (s)")
+bind_rows(elapsed |> mutate(metric = m[1]), bytecode |> mutate(metric = m[2])) |>
+  mutate(metric = factor(metric, m)) |>
+  pivot_longer(all_of(COMPILERS), names_to = "compiler") |>
+  dotplot(ipkgs, "s (log scale)") +
+  facet_wrap(~ metric, scales = "free_x")
+```
+
+```{r install-time-table, eval = has_install}
+tibble(package = ipkgs, group = group_of(ipkgs),
+       `gnur (s)` = fmt(elapsed$gnur, 2),
+       `crbcc (s)` = fmt(elapsed$crbcc, 2),
+       `gnur / crbcc` = times(elapsed$gnur / elapsed$crbcc, 2),
+       `bytecode gnur (s)` = fmt(bytecode$gnur, 2),
+       `bytecode crbcc (s)` = fmt(bytecode$crbcc, 3),
+       `bytecode gnur / crbcc` = times(bytecode$gnur / bytecode$crbcc),
+       `native (s)` = fmt(native$gnur, 2),
+       `bytecode share gnur` = pct(bytecode$gnur / elapsed$gnur))
+```
+
+```{asis, echo = has_install && has_ifn}
+### Package size
+
+The figure shows the byte-code compile time of each package (suite
+`install`). The x axis is the sum of the sizes of the closures that R
+compiles during the installation (suite `install-fn`).
+```
+
+```{r package-size-plot, eval = has_install && has_ifn, fig.height = 4.5}
+pz <- bytecode |>
+  pivot_longer(all_of(COMPILERS), names_to = "compiler") |>
+  inner_join(ifx |> group_by(benchmark) |> summarise(size = sum(size)), by = "benchmark") |>
+  mutate(compiler = factor(compiler, COMPILERS))
+ggplot(pz, aes(size, value)) +
+  geom_line(aes(group = benchmark), colour = RANGE, linewidth = 0.9) +
+  geom_point(aes(fill = compiler), shape = 21, colour = "white", size = 3.5, stroke = 0.8) +
+  geom_text(data = filter(pz, compiler == "gnur"), aes(label = benchmark),
+            hjust = -0.2, colour = INK, size = 3.2, check_overlap = TRUE) +
+  compiler_fill + log_x(expand = expansion(mult = c(0.05, 0.25))) + log_y() +
+  labs(x = "sum of the sizes of the closures (AST nodes, log scale)",
+       y = "byte-code compile time (s, log scale)")
+```
+
+```{asis, echo = has_ifn}
+### Function size
+
+This section shows the time of one compilation of each closure that R
+compiles during the installation (suite `install-fn`), by the size of the
+closure. One R process compiles each closure with the two compilers.
+```
+
+```{r ifn-intro, results = "asis", eval = has_ifn}
+md("There are {fmt(nrow(ifx), 0)} closures. The median size is {fmt(median(ifx$size), 0)} ",
+   "nodes, and the largest closure has {fmt(max(ifx$size), 0)} nodes.")
+```
+
+```{r ifn-table, eval = has_ifn}
+size_table(ifx)
+```
+
+```{r ifn-time-plot, eval = has_ifn, fig.height = 6}
+size_time_plot(ifx)
+```
+
+```{r ifn-speedup-plot, eval = has_ifn, fig.height = 4.5}
+size_speedup_plot(ifx)
+```
+
+```{asis, echo = has_ifn}
+#### By package
+
+The column "total" is the sum of the times of the closures with `gnur`,
+divided by the sum with `crbcc`.
+```
+
+```{r ifn-package, eval = has_ifn}
+size_by_package(ifx, ipkgs)
+```
+
+```{asis, echo = length(meta) > 0}
+## Environment
+```
+
+```{r env, eval = length(meta) > 0}
+kv <- regmatches(meta, regexpr(": ", meta), invert = TRUE)
+tibble(key = vapply(kv, `[`, "", 1),
+       value = vapply(kv, function(x) paste(x[-1], collapse = ": "), ""))
+```

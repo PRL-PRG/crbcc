@@ -44,37 +44,13 @@ grand_total_funs   <- 0L
 grand_total_lines  <- 0L
 grand_total_instrs <- 0L
 
-bytecode_size <- function(xs) {
-  if (is.list(xs)) {
-    sum(vapply(as.list(xs), bytecode_size, integer(1L)))
-  } else if (is.function(xs) || typeof(xs) == "bytecode") {
-    tryCatch({
-      capture.output(body <- compiler::disassemble(xs))
-      bc     <- body[[2]]
-      ops    <- vapply(as.list(bc), is.symbol, logical(1L))
-      consts <- body[[3]]
-      sum(ops) + bytecode_size(consts)
-    }, error = function(e) 0L)
-  } else {
-    0L
-  }
-}
-
 compare_compilers <- function(prog) {
 
   res_compiler <- compiler::cmpfun(prog, options=OPTIONS)
   res_crbcc    <- crbcc::cmpfun(prog, options=OPTIONS)
-  grand_total_instrs <<- grand_total_instrs + bytecode_size(res_crbcc)
-  
-  identical(res_compiler, res_crbcc,
-    num.eq             = FALSE,
-    single.NA          = FALSE,
-    attrib.as.set      = FALSE,
-    ignore.bytecode    = FALSE,
-    ignore.environment = FALSE,
-    ignore.srcref      = FALSE,
-    extptr.as.ref      = TRUE
-  )
+  grand_total_instrs <<- grand_total_instrs + crbcc:::bytecode_stats(res_crbcc)[["instructions"]]
+
+  crbcc:::identical_strict(res_compiler, res_crbcc)
 
 }
 
@@ -84,19 +60,7 @@ test_package <- function(package, torture=FALSE) {
     return(invisible(NULL))
   }
 
-  ns          <- getNamespace(package)
-  symbols     <- ls(ns, all.names=T)
-  objects     <- lapply(symbols, get, envir=ns)
-  is_closure  <- sapply(objects, \(x) typeof(x) == "closure")
-  funs        <- objects[is_closure]
-  func_names  <- symbols[is_closure]
-
-  uncompiled_funs <- lapply(funs, function(f) {
-    res <- f
-    body(res) <- body(f)
-    return(res)
-  })
-  names(uncompiled_funs) <- func_names
+  uncompiled_funs <- crbcc:::package_closures(package)
 
   compiled_ok <- 0L
   total_lines <- 0L

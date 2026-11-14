@@ -25,6 +25,7 @@ Thumbs.db
 
 # Compilation database
 compile_commands.json
+compile_flags.txt
 
 # Temporary files
 *.tmp
@@ -38,3 +39,4 @@ compile_commands.json
 
 # Development tools output
 .cache/
+/inst/benchmarks/__pycache__
