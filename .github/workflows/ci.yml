@@ -80,7 +80,11 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: any::rmarkdown, any::dplyr, any::tidyr, any::ggplot2
-      - uses: astral-sh/setup-uv@v10
+      # crbcc_bench.py has its dependencies inline. uv installs them in a few
+      # seconds, thus the job does not use the cache of setup-uv.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
       - uses: actions/download-artifact@v8
         with:
           name: package
