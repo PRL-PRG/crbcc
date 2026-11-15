@@ -80,6 +80,7 @@ meta  <- sub("^# ", "", grep("^#", lines, value = TRUE))
 raw   <- read.csv(text = grep("^#", lines, value = TRUE, invert = TRUE),
                   stringsAsFactors = FALSE)
 if (!"fn" %in% names(raw)) raw$fn <- NA
+if (!"compiler" %in% names(raw)) raw$compiler <- NA  # Only -fn suites.
 raw <- raw |>
   filter(suite %in% names(SUITES)) |>
   mutate(failure  = ifelse(is.na(failure), "", as.character(failure)),

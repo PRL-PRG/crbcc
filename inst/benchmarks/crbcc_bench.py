@@ -93,6 +93,7 @@ from bench import (
     RegexMetric,
     Sample,
     SharedBenchParams,
+    SystemProbe,
     Time,
     bench,
     bench_app,
@@ -377,9 +378,11 @@ def suites(params: Params):
 
 
 if __name__ == "__main__":
+    # The probe writes the machine data to the CSV as "# key: value" lines.
+    # The report shows them in the section Environment.
     app = bench_app(
         "Benchmarks of crbcc and the byte-code compiler of GNU R", params=Params
-    ).generator(suites)
+    ).generator(suites).with_probe(SystemProbe())
     # app.main() exits with 0 also if a run is a failure. Thus use
     # app.run_cli(), which gives the report.
     try:
