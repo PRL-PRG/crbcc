@@ -1,5 +1,5 @@
 ---
-title: "crbcc benchmarks"
+title: "crbcc"
 output:
   html_document:
     toc: true
@@ -241,90 +241,116 @@ if (has_install) {
 if (has_ifn) ifx <- fn_table("install-fn", ipkgs)
 ```
 
-## Input
+```{r parts, include = FALSE}
+## Show a part if the CSV has one of its suites, also if all its runs have a
+## failure.
+part_closures <- any(c("closures", "closures-fn") %in% present)
+part_install  <- any(c("install", "install-fn") %in% present)
 
-```{asis}
-The report reads the `--csv` report of `crbcc_bench.py`. The docstring of
-`crbcc_bench.py` gives the columns, the suites and the metrics. If the CSV
-does not have the suites of a section, the report does not show that section.
+## Writes the correctness of a part: the closures that are the same as GNU R,
+## and the runs with a failure.
+correctness <- function(part) {
+  s <- paste0(part, "-fn")
+  if (s %in% present) {
+    ok <- d |> filter(suite == s, metric == "size")
+    n  <- n_distinct(expected$benchmark[expected$suite == s])
+    md("The suite `{s}` has no failure for {n_distinct(ok$benchmark)} of {count(n, 'package')}. ",
+       "The results of {fmt(nrow(ok), 0)} closures are the same as GNU R.")
+  } else
+    md("The report has no samples of the suite `{s}`.")
+  f <- failed |> filter(sub("-.*", "", suite) == part)
+  if (nrow(f) > 0) {
+    md("**Runs with a failure.** The results do not include the packages that ",
+       "have a run with a failure in this part.")
+    print(knitr::kable(f, row.names = FALSE))
+  }
+}
 
-| Section | Suite | Metrics |
-|---|---|---|
-| [Correctness](#correctness) | `closures-fn`, `install-fn` | the runs with a failure |
-| [Closures](#closures): compile time, memory | `closures` | `compile`, `heap`, `max_rss` |
-| [Closures](#closures): function size | `closures-fn` | `size`, `time_gnur`, `time_crbcc` |
-| [Installation](#installation): installation time | `install` | `elapsed`, `bytecode`, `native` |
-| [Installation](#installation): package size, function size | `install`, `install-fn` | `bytecode`, `size`, `time_gnur`, `time_crbcc` |
-
-The two compilers are `gnur` (`compiler::cmpfun` of GNU R) and `crbcc`
-(`crbcc::cmpfun`). The size of a closure is the number of AST nodes of its
-body and of the default values of its formals (`crbcc:::function_size`).
-The time of one compilation of a closure (`crbcc:::compile_time`) is the
-median time of a batch of compilations, divided by the number of
-compilations in the batch. A batch takes a minimum of 100 us. The speedup of a group of closures is
-the geometric mean of the speedups of the closures.
-
-To make this report again, run these commands:
-
-    crbcc/inst/benchmarks/crbcc_bench.py --r R-4.6.2/bin/R --csv results.csv
-    Rscript -e 'rmarkdown::render("crbcc/inst/benchmarks/crbcc_bench.Rmd",
-                                  output_dir = ".", knit_root_dir = getwd())'
-```
-
-```{r input-runs, results = "asis"}
-if (length(pkgs) > 0) {
-  groups <- paste(sprintf("%d %s", table(group_of(pkgs)), names(table(group_of(pkgs)))),
+## Writes the packages of a part, and the number of runs of its timed suite.
+part_input <- function(p, s, r) {
+  if (length(p) == 0) return(invisible())
+  groups <- paste(sprintf("%d %s", table(group_of(p)), names(table(group_of(p)))),
                   collapse = ", ")
-  md("Closures: {count(length(pkgs), 'package')} ({groups}).")
-}
-if (has_closures)
-  md("The suite closures has {count(max(runs$n), 'run')} for each package and compiler.")
-if (length(ipkgs) > 0)
-  md("Installation: {count(length(ipkgs), 'package')}.")
-if (has_install)
-  md("The suite install has {count(max(iruns$n), 'run')} for each package and compiler.")
-md("The tables and figures show the median of the runs.")
-```
-
-## Correctness
-
-```{asis}
-The suites `closures-fn` and `install-fn` compile each closure with GNU R
-and crbcc, and compare the results with `crbcc:::identical_strict`
-(`identical()` with all strict flags, as `tests/compare.R`). If the results
-of a closure are different, the run is a failure. `closures-fn` uses the closures
-of the namespace. `install-fn` uses all closures that R compiles during the
-installation, also the S4 methods.
-```
-
-```{r correctness, results = "asis"}
-for (s in intersect(c("closures-fn", "install-fn"), present)) {
-  ok <- d |> filter(suite == s, metric == "size")
-  n  <- n_distinct(expected$benchmark[expected$suite == s])
-  md("- `{s}`: {n_distinct(ok$benchmark)} of {n} packages have no failure. ",
-     "The results of {fmt(nrow(ok), 0)} closures are the same as GNU R.")
-}
-if (!any(c("closures-fn", "install-fn") %in% present))
-  md("The report has no samples of the suites `closures-fn` and `install-fn`.")
-if (nrow(failed) > 0) {
-  md("**Runs with a failure.** The analysis of a part (closures or installation) ",
-     "does not include the packages that have a run with a failure in that part.")
-  print(knitr::kable(failed, row.names = FALSE))
+  md("Packages: {count(length(p), 'package')} ({groups}).")
+  if (!is.null(r))
+    md("The suite `{s}` has {count(max(r$n), 'run')} for each package and compiler.")
 }
 ```
 
-```{asis, echo = has_closures || has_fn}
+crbcc compiles R code to byte code. It gives the same byte code as the
+compiler package of GNU R, but it is faster.
+
+- [README and source code](https://github.com/PRL-PRG/crbcc#readme)
+- [Use crbcc](https://prl-prg.github.io/crbcc/crbcc.html): compile closures
+  and install packages with crbcc
+- [crbcc on CRAN](https://CRAN.R-project.org/package=crbcc)
+
+# Benchmarks
+
+```{r summary, results = "asis"}
+n_same <- sum(d$suite %in% c("closures-fn", "install-fn") & d$metric == "size")
+items <- c(
+  if (has_closures)
+    glue("**Closures:** crbcc compiles all closures of {count(length(pkgs), 'package')} ",
+         "{times(tot['gnur'] / tot['crbcc'])} faster than GNU R."),
+  if (has_install)
+    glue("**Installation:** with crbcc, R CMD INSTALL of {count(length(ipkgs), 'package')} ",
+         "is {times(itot['gnur'] / itot['crbcc'], 2)} faster."),
+  if (n_same > 0)
+    glue("**Correctness:** the byte code of {fmt(n_same, 0)} closures is the same ",
+         "as the byte code of GNU R."))
+cat(paste0("- ", items, "\n"), "\n", sep = "")
+```
+
+```{asis, echo = TRUE}
+The benchmarks compare two compilers: `gnur` (`compiler::cmpfun` of GNU R)
+and `crbcc` (`crbcc::cmpfun`). The size of a closure is the number of AST
+nodes of its body and of the default values of its formals
+(`crbcc:::function_size`). The time of one compilation of a closure
+(`crbcc:::compile_time`) is the median time of a batch of compilations,
+divided by the number of compilations in the batch. A batch takes a minimum
+of 100 us. The speedup of a group of closures is the geometric mean of the
+speedups of the closures.
+
+The tables and figures show the median of the runs.
+```
+
+```{asis, echo = part_closures}
 ## Closures
+
+### Methodology
 
 The suites `closures` and `closures-fn` compile the R code of all closures
 of a package namespace, not the byte code of the installed package.
+
+- `closures` measures the time and the memory to compile all closures of a
+  package. Each compiler has a new R process.
+- `closures-fn` compiles each closure with the two compilers in one R
+  process. It measures the time of one compilation of the closure. It also
+  compares the results with `crbcc:::identical_strict` (`identical()` with
+  all strict flags, as `tests/compare.R`). If the results of a closure are
+  different, the run is a failure.
+```
+
+```{r closures-input, results = "asis", eval = part_closures}
+part_input(pkgs, "closures", if (has_closures) runs)
+```
+
+```{asis, echo = part_closures}
+### Results
+
+#### Correctness
+```
+
+```{r closures-correctness, results = "asis", eval = part_closures}
+correctness("closures")
 ```
 
 ```{asis, echo = has_closures}
-### Compile time
+#### Compile time
 
 The suite `closures` measures the time to compile all closures of a
-package. Each compiler has a new R process.
+package.
 ```
 
 ```{r closures-summary, eval = has_closures}
@@ -369,7 +395,7 @@ tibble(package = pkgs, group = group_of(pkgs),
 ```{asis, echo = has_closures}
 The column "spread" is (max - min) / median of the runs of the compiler.
 
-### Memory
+#### Memory
 
 - **heap**: the maximum R heap during the compilation, minus the heap
   before it. The value comes from `gc()` "max used" (Ncells + Vcells). R
@@ -399,11 +425,10 @@ tibble(package = pkgs,
 ```
 
 ```{asis, echo = has_fn}
-### Function size
+#### Function size
 
-This section shows the time of one compilation of each closure of the
-namespace (suite `closures-fn`), by the size of the closure. One R process
-compiles each closure with the two compilers.
+The time of one compilation of each closure of the namespace (suite
+`closures-fn`), by the size of the closure.
 ```
 
 ```{r fn-intro, results = "asis", eval = has_fn}
@@ -428,7 +453,7 @@ size_speedup_plot(fx)
 ```
 
 ```{asis, echo = has_fn}
-#### By package
+##### By package
 
 The column "total" is the sum of the times of the closures with `gnur`,
 divided by the sum with `crbcc`.
@@ -439,7 +464,7 @@ size_by_package(fx, pkgs)
 ```
 
 ```{asis, echo = has_fn}
-#### Slowest closures
+##### Slowest closures
 
 The 10 closures with the longest compile time of `crbcc`:
 ```
@@ -460,25 +485,44 @@ The 10 closures with the smallest speedup of `crbcc` over GNU R:
 fx |> slice_min(gnur / crbcc, n = 10, with_ties = FALSE) |> fn_rows()
 ```
 
-```{asis, echo = has_install || has_ifn}
+```{asis, echo = part_install}
 ## Installation
 
+### Methodology
+
 The suites `install` and `install-fn` install each package from its source
-with `R CMD INSTALL`. The profile file `inst/r-cmd-install-hook.R`
-(`R_PROFILE_USER`) replaces `compiler:::tryCmpfun`, the function that R
-uses to compile each closure of the package.
+with `R CMD INSTALL`. The hook `inst/r-cmd-install-hook.R` (`R_PROFILE_USER`)
+replaces `compiler:::tryCmpfun`, the function that R uses to compile each
+closure of the package.
+
+- `install` runs `R CMD INSTALL` one time for each compiler. It measures
+  these values:
+  - **elapsed**: the wall time of `R CMD INSTALL`.
+  - **bytecode**: the time in the byte-code compiler, for all closures of
+    the package.
+  - **native**: the time to compile and link `src/`. For a package without
+    `src/`, the value is 0.
+- `install-fn` runs `R CMD INSTALL` one time. It compiles each closure that
+  R compiles during the installation with the two compilers, as
+  `closures-fn` does. These closures include the S4 methods.
+```
+
+```{r install-input, results = "asis", eval = part_install}
+part_input(ipkgs, "install", if (has_install) iruns)
+```
+
+```{asis, echo = part_install}
+### Results
+
+#### Correctness
+```
+
+```{r install-correctness, results = "asis", eval = part_install}
+correctness("install")
 ```
 
 ```{asis, echo = has_install}
-### Installation time
-
-The suite `install` runs `R CMD INSTALL` one time for each compiler.
-
-- **elapsed**: the wall time of `R CMD INSTALL`.
-- **bytecode**: the time in the byte-code compiler, for all closures of the
-  package.
-- **native**: the time to compile and link `src/`. For a package without
-  `src/`, the value is 0.
+#### Installation time
 ```
 
 ```{r install-summary, eval = has_install}
@@ -522,7 +566,7 @@ tibble(package = ipkgs, group = group_of(ipkgs),
 ```
 
 ```{asis, echo = has_install && has_ifn}
-### Package size
+#### Package size
 
 The figure shows the byte-code compile time of each package (suite
 `install`). The x axis is the sum of the sizes of the closures that R
@@ -545,11 +589,10 @@ ggplot(pz, aes(size, value)) +
 ```
 
 ```{asis, echo = has_ifn}
-### Function size
+#### Function size
 
-This section shows the time of one compilation of each closure that R
-compiles during the installation (suite `install-fn`), by the size of the
-closure. One R process compiles each closure with the two compilers.
+The time of one compilation of each closure that R compiles during the
+installation (suite `install-fn`), by the size of the closure.
 ```
 
 ```{r ifn-intro, results = "asis", eval = has_ifn}
@@ -570,7 +613,7 @@ size_speedup_plot(ifx)
 ```
 
 ```{asis, echo = has_ifn}
-#### By package
+##### By package
 
 The column "total" is the sum of the times of the closures with `gnur`,
 divided by the sum with `crbcc`.
@@ -578,6 +621,35 @@ divided by the sum with `crbcc`.
 
 ```{r ifn-package, eval = has_ifn}
 size_by_package(ifx, ipkgs)
+```
+
+# Reproduce
+
+```{asis, echo = TRUE}
+## Input
+
+The report reads the `--csv` report of
+`inst/benchmarks/crbcc_bench.py`. The docstring of `crbcc_bench.py` gives
+the columns, the suites and the metrics. If the CSV does not have the
+suites of a part, the report does not show that part.
+
+| Part | Suite | Metrics |
+|---|---|---|
+| Closures | `closures` | `compile`, `heap`, `max_rss` |
+| Closures | `closures-fn` | `size`, `time_gnur`, `time_crbcc`, correctness |
+| Installation | `install` | `elapsed`, `bytecode`, `native` |
+| Installation | `install-fn` | `size`, `time_gnur`, `time_crbcc`, correctness |
+
+To make this report again, run these commands in a work directory that has
+the crbcc source in `crbcc/`:
+
+    mkdir -p pkg-lib
+    R CMD INSTALL --library=pkg-lib crbcc
+    crbcc/inst/benchmarks/crbcc_bench.py --r "$(which R)" --csv results.csv
+    Rscript -e 'rmarkdown::render("crbcc/inst/benchmarks/crbcc_bench.Rmd",
+                                  output_dir = ".", knit_root_dir = getwd())'
+
+For more packages, use `--packages`. For the options, use `--help`.
 ```
 
 ```{asis, echo = length(meta) > 0}
