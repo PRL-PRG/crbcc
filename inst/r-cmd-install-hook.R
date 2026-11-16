@@ -1,33 +1,41 @@
-# An R_PROFILE_USER file for R CMD INSTALL. R reads it at the start of each
-# R process of R CMD INSTALL. The environment variable RBC_HOOK sets the mode:
+# An R_PROFILE_USER file that makes R CMD INSTALL compile the closures of a
+# package with crbcc. R reads it at the start of each R process. For the
+# functions that use it, refer to ?crbcc::enable_r_cmd_install_hook.
 #
-#   gnur   Compile the closures of the package with `compiler::cmpfun`.
-#   crbcc  Compile the closures of the package with `crbcc::cmpfun`.
-#   check  Compile each closure with GNU R and crbcc, compare the results and
-#          measure the compile time of each compiler
-#          (`crbcc:::bench_closure`). RBC_ITERATIONS is the number of batches
-#          of `crbcc:::compile_time`. The default is 10.
+# The environment variable CRBCC_MODE sets the mode:
 #
-# If RBC_HOOK has a different value, the file does nothing.
+#   (not set)    Compile with `crbcc::cmpfun`. If crbcc cannot compile a
+#                closure, compile it with GNU R. The file writes no output.
+#   bench_gnur   Compile with `compiler::cmpfun` and measure the time.
+#   bench_crbcc  Compile with `crbcc::cmpfun` and measure the time.
+#   bench_both   Compile each closure with GNU R and crbcc, compare the
+#                results and measure the compile time of each compiler
+#                (`crbcc:::bench_closure`). CRBCC_ITERATIONS is the number of
+#                batches of `crbcc:::compile_time`. The default is 10.
 #
-# The output on stdout:
-#   RBC bytecode: <s>  gnur, crbcc: the time in the byte-code compiler. There
-#                      is one line for each R process that compiles a closure.
-#   RBC native: <s>    gnur, crbcc: the time in `tools:::.shlib_internal`,
-#                      which compiles and links src/.
-#   RBC fn ...         check: one line for each closure. The key is
+# inst/benchmarks/crbcc_bench.py uses the bench modes. They write to stdout:
+#
+#   RBC bytecode: <s>  bench_gnur, bench_crbcc: the time in the byte-code
+#                      compiler. There is one line for each R process that
+#                      compiles a closure.
+#   RBC native: <s>    bench_gnur, bench_crbcc: the time in
+#                      `tools:::.shlib_internal`, which compiles and links src/.
+#   RBC fn ...         bench_both: one line for each closure. The key is
 #                      <process id>:<index> (see `crbcc:::bench_closure`).
-#   RBC differs: ...   check: a closure with different results.
+#   RBC differs: ...   bench_both: a closure with different results.
 #
-# To install a package with crbcc as the byte-code compiler:
+# To install a package with crbcc:
 #
-#   R_PROFILE_USER=$(Rscript -e 'cat(system.file("r-cmd-install-hook.R", package = "crbcc"))') \
-#     RBC_HOOK=crbcc R CMD INSTALL foo_1.0.tar.gz
+#   R_PROFILE_USER=$(Rscript -e 'cat(crbcc::r_cmd_install_hook_path())') \
+#     R CMD INSTALL foo_1.0.tar.gz
 
 local({
-    mode <- Sys.getenv("RBC_HOOK")
-    if (!mode %in% c("gnur", "crbcc", "check"))
+    mode <- Sys.getenv("CRBCC_MODE")
+    if (!mode %in% c("", "bench_gnur", "bench_crbcc", "bench_both")) {
+        warning("CRBCC_MODE has an unknown value \"", mode, "\". crbcc is not used.",
+                call. = FALSE)
         return(invisible())
+    }
 
     now <- function() unclass(Sys.time())
 
@@ -40,27 +48,29 @@ local({
     }
 
     ## Native: R CMD INSTALL compiles and links src/ in .shlib_internal.
-    setHook(packageEvent("tools", "onLoad"), function(...) {
-        shlib <- tools:::.shlib_internal
-        patch("tools", ".shlib_internal", function(args) {
-            t0 <- now()
-            on.exit(cat(sprintf("RBC native: %.6f\n", now() - t0)))
-            shlib(args)
+    if (mode %in% c("bench_gnur", "bench_crbcc"))
+        setHook(packageEvent("tools", "onLoad"), function(...) {
+            shlib <- tools:::.shlib_internal
+            patch("tools", ".shlib_internal", function(args) {
+                t0 <- now()
+                on.exit(cat(sprintf("RBC native: %.6f\n", now() - t0)))
+                shlib(args)
+            })
         })
-    })
 
     ## Bytecode: R uses `compiler:::tryCmpfun` to compile each closure of the
     ## package. Compile the functions of the hook with `bc`. If you do not,
-    ## the JIT of R compiles them with `tryCmpfun`, and the hook counts them.
+    ## the JIT of R compiles them with `tryCmpfun`, and the bench modes count
+    ## them.
     setHook(packageEvent("compiler", "onLoad"), function(...) {
         bc <- compiler::cmpfun
         ## crbcc does not read the options that R CMD INSTALL sets.
         opts <- list(suppressAll = FALSE, suppressUndefined = TRUE,
                      suppressNoSuperAssignVar = TRUE)
 
-        if (mode == "check") {
+        if (mode == "bench_both") {
             bench <- crbcc:::bench_closure  # Load crbcc before the first closure.
-            k <- as.integer(Sys.getenv("RBC_ITERATIONS", "10"))
+            k <- as.integer(Sys.getenv("CRBCC_ITERATIONS", "10"))
             n <- 0
             patch("compiler", "tryCmpfun", bc(function(f) {
                 n <<- n + 1
@@ -69,11 +79,17 @@ local({
             return(invisible())
         }
 
-        if (mode == "gnur")
-            cmpfun <- compiler::cmpfun
-        else {
+        if (mode == "") {
+            cmp <- crbcc::cmpfun
+            gnur <- compiler:::tryCmpfun
+            patch("compiler", "tryCmpfun", bc(function(f)
+                tryCatch(cmp(f, options = opts), error = function(e) gnur(f))))
+            return(invisible())
+        }
+
+        cmpfun <- if (mode == "bench_gnur") compiler::cmpfun else {
             cmp <- crbcc::cmpfun  # Load crbcc before the first time measurement.
-            cmpfun <- bc(function(f) cmp(f, options = opts))
+            bc(function(f) cmp(f, options = opts))
         }
         total <- 0
         patch("compiler", "tryCmpfun", bc(function(f) {

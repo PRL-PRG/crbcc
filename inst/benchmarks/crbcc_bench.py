@@ -36,7 +36,7 @@ part of the report, the report does not show that part.
                inst/r-cmd-install-hook.R     crbcc             bytecode    s
                                                                native      s
   install-fn   R CMD INSTALL with the hook   -         1       size        AST nodes
-               in mode check                                   time_gnur   s
+               in mode bench_both                              time_gnur   s
                                                                time_crbcc  s
 
   compile     the time to compile all closures of the package namespace
@@ -58,19 +58,20 @@ crbcc give different results for a closure, the -fn run is a failure.
 Packages (--packages, repeatable, default: base):
   base         the base packages that have closures (no install suites,
                because R CMD INSTALL cannot install a base package)
-  small        lattice and Matrix
+  small        MASS, Matrix, lattice, mgcv and survival
   recommended  the recommended packages
   cran50       the 50 CRAN packages with the most downloads in the month
                before 2026-11-12, from the CRAN snapshot of that day
 
 Directories in the work directory:
   pkg-lib/      crbcc, the packages and their dependencies
-  pkg-src/      the sources of the cran50 packages
+  pkg-src/      the sources from the CRAN snapshot
   pkg-install/  the target library of the install suites
 
-For small and recommended, R must be a build in the R source tree. The
-script installs the recommended packages from src/library/Recommended of the
-R home.
+If R does not have the recommended packages, the script installs them from
+src/library/Recommended of the R home. Thus R must then be a build in the R
+source tree. If a package source is not in src/library/Recommended, the
+script downloads it from the CRAN snapshot to pkg-src/.
 """
 
 import os
@@ -139,7 +140,7 @@ CRAN50 = [
 ]  # fmt: skip
 
 PACKAGES = {
-    "small": ["lattice", "Matrix"],
+    "small": ["MASS", "Matrix", "lattice", "mgcv", "survival"],
     "base": BASE,
     "recommended": RECOMMENDED,
     "cran50": CRAN50,
@@ -220,11 +221,12 @@ def prepare(params: Params, packages: list[str]) -> None:
         sys.exit(f"error: install crbcc into {PKG_LIB}: {params.r} CMD INSTALL --library={PKG_LIB} crbcc")
 
     cran = [p for p in CRAN50 if p in packages]
-    # Some cran50 packages use the recommended packages, for example lme4. If
-    # they are missing, install.packages installs them from CRAN_SNAPSHOT. The
-    # recommended suites then use versions that are different from the
-    # sources in src/library/Recommended. Thus install them from the sources.
-    rec = RECOMMENDED if cran else [p for p in RECOMMENDED if p in packages]
+    # R must have all recommended packages, because some packages use them,
+    # for example mgcv uses nlme and lme4 uses Matrix. If R does not have
+    # them, install them from the sources in src/library/Recommended. If
+    # install.packages installs them from CRAN_SNAPSHOT, their versions are
+    # different from these sources.
+    rec = RECOMMENDED if any(p not in BASE for p in packages) else []
     if todo := missing(params, rec + cran):
         PKG_LIB.mkdir(exist_ok=True)
         for p in (p for p in rec if p in todo):
@@ -235,7 +237,8 @@ def prepare(params: Params, packages: list[str]) -> None:
             r_run(params, f'install.packages({r_vector(todo_cran)}, lib = "{PKG_LIB}", '
                           f'repos = "{CRAN_SNAPSHOT}", type = "source", Ncpus = 8)')
 
-    if no_src := [p for p in cran if not tarball(params, p).exists()]:
+    # A binary build of R does not have src/library/Recommended.
+    if no_src := [p for p in packages if p not in BASE and not tarball(params, p).exists()]:
         PKG_SRC.mkdir(exist_ok=True)
         r_run(params, f'download.packages({r_vector(no_src)}, destdir = "{PKG_SRC}", '
                       f'repos = "{CRAN_SNAPSHOT}", type = "source")')
@@ -305,8 +308,8 @@ def install_env(mode: str | None):
     def env(ctx: Context[Params]) -> dict[str, str]:
         return r_env() | {
             "R_PROFILE_USER": str(HOOK),
-            "RBC_HOOK": mode or ctx.data.compiler,
-            "RBC_ITERATIONS": str(ctx.params.iterations),
+            "CRBCC_MODE": mode or f"bench_{ctx.data.compiler}",
+            "CRBCC_ITERATIONS": str(ctx.params.iterations),
         }
 
     return env
@@ -367,7 +370,7 @@ def suites(params: Params):
 
         res.append(new("install-fn", installable)
             .with_command(install_command)
-            .with_env(install_env("check"), override=True)
+            .with_env(install_env("bench_both"), override=True)
             .with_setup(remove_package)
             .with_metric(FnMetric())
             .with_outlier_detection(NoDetection())

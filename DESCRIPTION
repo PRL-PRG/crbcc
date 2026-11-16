@@ -19,6 +19,9 @@ Imports:
     stats,
     utils
 Suggests:
-    compiler
+    compiler,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
 URL: https://github.com/PRL-PRG/crbcc
 BugReports: https://github.com/PRL-PRG/crbcc/issues

@@ -1,13 +1,15 @@
 # Builds and tests crbcc, and measures its performance with the benchmarks.
 # The jobs:
 #
-#   build      Runs R CMD build. The artifact "package" is the package source.
+#   build      Runs R CMD build, which also builds the vignette. The artifact
+#              "package" is the package source.
 #   test       Runs R CMD check of the package source on Linux and macOS. The
 #              check runs tests/compare.R. If the check gives an ERROR or a
 #              WARNING, the job is a failure.
-#   benchmark  Runs inst/benchmarks/crbcc_bench.py with the base packages and
-#              makes the report inst/benchmarks/crbcc_bench.Rmd. The artifact
-#              "benchmark" has the report and the CSV.
+#   benchmark  Runs inst/benchmarks/crbcc_bench.py with the packages base and
+#              small, without the suite install-fn, and makes the report
+#              inst/benchmarks/crbcc_bench.Rmd. The artifact "benchmark" has
+#              the report, the CSV and the vignette.
 #   pages      Only for a push to main: puts the benchmark report on GitHub
 #              Pages. README.md shows its figure and its badge.
 #
@@ -33,8 +35,10 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
       - name: Build
-        run: R CMD build --no-build-vignettes .
+        run: R CMD build .
       - uses: actions/upload-artifact@v7
         with:
           name: package
@@ -51,6 +55,11 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
+      # R CMD check builds the vignette again.
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: any::knitr, any::rmarkdown
       - uses: actions/download-artifact@v8
         with:
           name: package
@@ -94,7 +103,9 @@ jobs:
         run: |
           mkdir pkg-lib
           R CMD INSTALL --library=pkg-lib crbcc_*.tar.gz
+          # install-fn takes approximately 10 minutes for Matrix only.
           uv run --script ../inst/benchmarks/crbcc_bench.py --r "$(which R)" \
+            --packages base --packages small --exclude '^install-fn/' \
             --runs 3 --iterations 5 --no-progress --csv results.csv
       # If a run is a failure, crbcc_bench.py exits with 1. Make the report
       # also in that case, because it shows the failures.
@@ -106,6 +117,7 @@ jobs:
             output_dir = "site", output_file = "index.html", knit_root_dir = getwd(),
             params = list(csv = "results.csv", assets = "site"))'
           cp results.csv site/
+          tar -xzf crbcc_*.tar.gz -O crbcc/inst/doc/crbcc.html > site/crbcc.html
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:

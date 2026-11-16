@@ -24,11 +24,12 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 
 ## Performance
 
-[![Compile time of each closure of the R base packages with GNU R and crbcc](https://prl-prg.github.io/crbcc/closures-time-by-size.png)](https://prl-prg.github.io/crbcc/)
+[![Compile time of each closure with GNU R and crbcc](https://prl-prg.github.io/crbcc/closures-time-by-size.png)](https://prl-prg.github.io/crbcc/)
 
-The figure shows the time to compile each closure of the R base packages
-with GNU R and with crbcc, by the size of the closure. The CI makes the
-figure again for each push to `main`. The
+The figure shows the time to compile each closure with GNU R and with
+crbcc, by the size of the closure. The closures are from the R base packages
+and from MASS, Matrix, lattice, mgcv and survival. The CI makes the figure
+again for each push to `main`. The
 [benchmark report](https://prl-prg.github.io/crbcc/) gives all the results.
 
 ## Interface
@@ -36,6 +37,7 @@ figure again for each push to `main`. The
 - Compile generic language objects with `crbcc::compile()`
 - Compile full source files with `crbcc::cmpfile()`
 - Load compiled files with `crbcc::loadcmp()`
+- Install packages with crbcc with `crbcc::enable_r_cmd_install_hook()`
   
 ## Requirements
 
@@ -84,6 +86,26 @@ library(crbcc)
 cmpfile("script.R", "script.Rc")
 loadcmp("script.Rc", envir = .GlobalEnv)
 ```
+
+## Install packages with crbcc
+
+To make `install.packages()` compile the packages with crbcc:
+
+```r
+crbcc::enable_r_cmd_install_hook()
+install.packages("MASS")
+crbcc::enable_r_cmd_install_hook(FALSE)
+```
+
+To install a package from a shell:
+
+```bash
+R_PROFILE_USER=$(Rscript -e 'cat(crbcc::r_cmd_install_hook_path())') \
+  R CMD INSTALL foo_1.0.tar.gz
+```
+
+For the details, refer to the vignette: `vignette("crbcc", package = "crbcc")`
+or [online](https://prl-prg.github.io/crbcc/crbcc.html).
 
 ## Compiler options
 
@@ -151,20 +173,18 @@ Rscript -e 'rmarkdown::render("crbcc/inst/benchmarks/crbcc_bench.Rmd", output_di
 ```
 
 By default, the benchmarks use the R base packages. For more packages, use
-`--packages small` (lattice and Matrix), `--packages recommended` or
-`--packages cran50`. Only these packages have the install suites. For small
-and recommended, R must be a build in the R source tree, because the script
-installs the recommended packages from `src/library/Recommended`. For cran50,
-this is also necessary if the R library does not have the recommended
-packages. A binary R has them. For the other options, use `--help`. The CI workflow `.github/workflows/ci.yml` runs
-the benchmarks for each push and pull request.
+`--packages small` (MASS, Matrix, lattice, mgcv and survival),
+`--packages recommended` or `--packages cran50`. Only these packages have
+the install suites. If R does not have the recommended packages, the script
+installs them from `src/library/Recommended`. Thus R must then be a build in
+the R source tree. The script downloads the other package sources from a
+CRAN snapshot. For the other options, use `--help`. The CI workflow
+`.github/workflows/ci.yml` runs the benchmarks with the packages base and
+small, without the suite install-fn, for each push and pull request.
 
-To install a package with crbcc as the byte-code compiler:
-
-```bash
-R_PROFILE_USER=$(Rscript -e 'cat(system.file("r-cmd-install-hook.R", package = "crbcc"))') \
-  RBC_HOOK=crbcc R CMD INSTALL foo_1.0.tar.gz
-```
+The install suites use the benchmark modes of the hook
+`inst/r-cmd-install-hook.R` (`CRBCC_MODE`). The comments in the hook give
+the modes.
 
 To profile the compilation of one closure with an external profiler:
 
