@@ -20,9 +20,33 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 ## Features
 
 - The output is the same as the output of the GNU-R compiler. `tests/compare.R` compares the results of `cmpfun` for all 8,325 closures (approximately 231,000 lines of code) of the base and recommended R packages.
-- For the closures of the base and recommended R packages, crbcc is approximately 44x faster than the GNU-R compiler (0.86 s, not 37.9 s). See [Performance](#performance).
+- For the closures of the base and recommended R packages, crbcc is approximately 46x faster than the GNU-R compiler (0.83 s, not 38.3 s). See [Performance](#performance).
+- With crbcc, `R CMD INSTALL` of the 15 recommended R packages takes 41% less time.
 
 ## Performance
+
+These results are for the 12 base and the 15 recommended R packages, on an
+Apple M4. They are the median of 5 runs.
+
+| | GNU R | crbcc | |
+|---|---:|---:|---|
+| Compile all 8,323 closures of the 27 packages | 38.3 s | 0.83 s | 46x faster |
+| `R CMD INSTALL` of the 15 recommended packages | 70.5 s | 41.6 s | 29 s (41%) less |
+| Byte-code compilation in this `R CMD INSTALL` | 29.5 s | 0.61 s | 48x faster |
+| `R CMD INSTALL` of mgcv | 14.6 s | 5.1 s | 65% less |
+
+- With GNU R, the byte-code compilation is 42% of the time of
+  `R CMD INSTALL`. With crbcc, it is 1.5%. The other time, for example to
+  compile the C code (`make -j8`) and to make the help pages, is the same
+  for the two compilers.
+- The geometric mean of the speedups of the closures is 62x.
+- For all 17,598 closures, the byte code of crbcc is the same as the byte
+  code of GNU R. These are the closures of the package namespaces and the
+  closures that R compiles during `R CMD INSTALL`, also the S4 methods.
+
+To make these results, run
+`crbcc_bench.py --packages base --packages recommended` (see
+[Tests and benchmarks](#tests-and-benchmarks)).
 
 [![Compile time of each closure with GNU R and crbcc](https://prl-prg.github.io/crbcc/closures-time-by-size.png)](https://prl-prg.github.io/crbcc/)
 
@@ -30,7 +54,8 @@ The figure shows the time to compile each closure with GNU R and with
 crbcc, by the size of the closure. The closures are from the R base packages
 and from MASS, Matrix, lattice, mgcv and survival. The CI makes the figure
 again for each push to `main`. The
-[benchmark report](https://prl-prg.github.io/crbcc/) gives all the results.
+[benchmark report](https://prl-prg.github.io/crbcc/) gives all the results
+of the CI.
 
 ## Interface
 - Compile closures with `crbcc::cmpfun()`
