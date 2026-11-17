@@ -1,0 +1,84 @@
+---
+title: "Use crbcc"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Use crbcc}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+crbcc compiles R code to byte code. It gives the same byte code as the
+compiler package of R, but it is faster. This vignette shows how to use
+crbcc for a closure, for the installation of packages and for the JIT of R.
+For the performance of crbcc, refer to the
+[benchmark report](https://prl-prg.github.io/crbcc/).
+
+## Compile a closure
+
+`cmpfun()` compiles a closure, as `compiler::cmpfun()` does.
+
+```{r}
+library(crbcc)
+
+f <- function(x) {
+  s <- 0
+  for (i in seq_len(x)) s <- s + i
+  s
+}
+
+cf <- cmpfun(f)
+cf(10)
+```
+
+The result is the same as the result of the compiler package:
+
+```{r}
+identical(cf, compiler::cmpfun(f), ignore.bytecode = FALSE)
+```
+
+`compile()`, `cmpfile()` and `loadcmp()` work as the functions of the
+compiler package with the same names. For the compiler options, refer to
+`?cmpfun`.
+
+## Install packages with crbcc
+
+R CMD INSTALL compiles the closures of a package to byte code. To make it
+use crbcc, enable the R CMD INSTALL hook before the installation:
+
+```{r, eval = FALSE}
+enable_r_cmd_install_hook()
+install.packages("MASS")
+enable_r_cmd_install_hook(FALSE)
+```
+
+`enable_r_cmd_install_hook()` sets the environment variable `R_PROFILE_USER`
+to the hook. The R processes that this R session starts read this file.
+While the hook is enabled, these R processes do not read your `.Rprofile`
+file.
+
+To install a package from a shell, set `R_PROFILE_USER` for R CMD INSTALL:
+
+```sh
+R_PROFILE_USER=$(Rscript -e 'cat(crbcc::r_cmd_install_hook_path())') \
+  R CMD INSTALL foo_1.0.tar.gz
+```
+
+If crbcc cannot compile a closure, the hook compiles it with the compiler
+package.
+
+**Note:** crbcc compiles only the packages that R installs from source. A
+binary package is already compiled. On Windows and with the R for macOS
+from CRAN, `install.packages()` installs binary packages by default. To
+install from source, use `install.packages(..., type = "source")`.
+
+## Use crbcc in the JIT
+
+The JIT of R compiles a closure or a loop before R runs it. A function
+`enable_jit()`, which makes the JIT use crbcc, is ready but not active.
+It changes two functions of the compiler package. The CRAN policy permits
+this change only with the agreement of the maintainer of the compiler
+package, and we do not have this agreement yet.

@@ -14,21 +14,23 @@ TEST_SOURCES := $(wildcard tests/*.R)
 
 # Formatting and tooling
 CLANG_FORMAT := clang-format
-BEAR := bear
 
 .PHONY: all
 all: install
 
 .PHONY: install
-install:
-		bear -- $(R) CMD INSTALL .
+install: compile_flags.txt
+		$(R) CMD INSTALL .
+
+.PHONY: compile_flags.txt
+compile_flags.txt:
+	{ echo -xc; $(R) CMD config --cppflags | tr ' ' '\n'; } > $@
 
 .PHONY: clean
 clean:
 	rm -f $(PACKAGE_NAME)_*.tar.gz
 	rm -f src/*.o src/*.so
-	rm -f compile_commands.json
-	rm -rf man
+	rm -f compile_flags.txt
 
 .PHONY: test
 test: install

@@ -1,0 +1,143 @@
+# Builds and tests crbcc, and measures its performance with the benchmarks.
+# The jobs:
+#
+#   build      Runs R CMD build, which also builds the vignette. The artifact
+#              "package" is the package source.
+#   test       Runs R CMD check of the package source on Linux and macOS. The
+#              check runs tests/compare.R. If the check gives an ERROR or a
+#              WARNING, the job is a failure.
+#   benchmark  Runs inst/benchmarks/crbcc_bench.py with the packages base and
+#              small, without the suite install-fn, and makes the report
+#              inst/benchmarks/crbcc_bench.Rmd. The artifact "benchmark" has
+#              the report, the CSV and the vignette.
+#   pages      Only for a push to main: puts the benchmark report on GitHub
+#              Pages. README.md shows its figure and its badge.
+#
+# Before the first push to main, set Settings > Pages > Source to
+# "GitHub Actions".
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
+      - name: Build
+        run: R CMD build .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package
+          path: crbcc_*.tar.gz
+
+  test:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      # R CMD check builds the vignette again.
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: any::knitr, any::rmarkdown
+      - uses: actions/download-artifact@v8
+        with:
+          name: package
+      - name: Check
+        env:
+          _R_CHECK_FORCE_SUGGESTS_: false
+        run: |
+          R CMD check --no-manual crbcc_*.tar.gz
+          # If the log has a WARNING, stop the job with an error. R CMD check
+          # does this only for an ERROR.
+          ! grep -E '^Status: .*WARNING' crbcc.Rcheck/00check.log
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: check-${{ matrix.os }}
+          path: crbcc.Rcheck
+
+  benchmark:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rmarkdown, any::dplyr, any::tidyr, any::ggplot2
+      # crbcc_bench.py has its dependencies inline. uv installs them in a few
+      # seconds, thus the job does not use the cache of setup-uv.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: package
+          path: bench
+      - name: Benchmark
+        working-directory: bench
+        run: |
+          mkdir pkg-lib
+          R CMD INSTALL --library=pkg-lib crbcc_*.tar.gz
+          # install-fn takes approximately 10 minutes for Matrix only.
+          uv run --script ../inst/benchmarks/crbcc_bench.py --r "$(which R)" \
+            --packages base --packages small --exclude '^install-fn/' \
+            --runs 3 --iterations 5 --no-progress --csv results.csv
+      # If a run is a failure, crbcc_bench.py exits with 1. Make the report
+      # also in that case, because it shows the failures.
+      - name: Report
+        if: ${{ !cancelled() }}
+        working-directory: bench
+        run: |
+          Rscript -e 'rmarkdown::render("../inst/benchmarks/crbcc_bench.Rmd",
+            output_dir = "site", output_file = "index.html", knit_root_dir = getwd(),
+            params = list(csv = "results.csv", assets = "site"))'
+          cp results.csv site/
+          tar -xzf crbcc_*.tar.gz -O crbcc/inst/doc/crbcc.html > site/crbcc.html
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark
+          path: bench/site
+      - if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: bench/site
+
+  pages:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [test, benchmark]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

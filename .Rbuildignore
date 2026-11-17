@@ -1,9 +1,13 @@
-^utils$
 ^\.clang-format$
 ^\.vscode$
 ^crbcc\.Rcheck$
 ^crbcc_.*\.tar\.gz$
 ^compile_commands\.json$
+^compile_flags\.txt$
 ^LICENSE$
 ^src/.*\.(o|so)$
 ^Makefile$
+^inst/benchmarks$
+^\.github$
+^\.git-blame-ignore-revs$
+^\.cache$
