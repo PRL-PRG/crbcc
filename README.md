@@ -20,40 +20,44 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 ## Features
 
 - The output is the same as the output of the GNU-R compiler. `tests/compare.R` compares the results of `cmpfun` for all 8,325 closures (approximately 231,000 lines of code) of the base and recommended R packages.
-- For the closures of the base and recommended R packages, crbcc is approximately 46x faster than the GNU-R compiler (0.83 s, not 38.3 s). See [Performance](#performance).
-- With crbcc, `R CMD INSTALL` of the 15 recommended R packages takes 41% less time.
+- During `R CMD INSTALL` of 65 R packages, crbcc compiles the closures approximately 49x faster than the GNU-R compiler (3.4 s, not 166.8 s). See [Performance](#performance).
+- If the native code is prebuilt, `R CMD INSTALL` of the 15 recommended R packages takes 54% less time with crbcc.
 
 ## Performance
 
-These results are for the 12 base and the 15 recommended R packages, on an
-Apple M4. They are the median of 5 runs.
+These results are for 65 R packages: the 15 recommended packages and the
+50 CRAN packages with the most downloads (the first 50 packages of
+`inst/benchmarks/docker/cran100.txt`). The two compilers ran on the same
+machine, an Intel Xeon Gold 6140 with Linux and R 4.6.2. The results are
+the median of 3 runs. The benchmark Docker image has the compiled native
+code of the packages, thus the times do not include the compilation of C,
+C++ and Fortran code.
 
 | | GNU R | crbcc | |
 |---|---:|---:|---|
-| Compile all 8,323 closures of the 27 packages | 38.3 s | 0.83 s | 46x faster |
-| `R CMD INSTALL` of the 15 recommended packages | 70.5 s | 41.6 s | 29 s (41%) less |
-| Byte-code compilation in this `R CMD INSTALL` | 29.5 s | 0.61 s | 48x faster |
-| `R CMD INSTALL` of mgcv | 14.6 s | 5.1 s | 65% less |
+| `R CMD INSTALL` of the 65 packages | 394.3 s | 230.5 s | 164 s (42%) less |
+| Byte-code compilation in this `R CMD INSTALL` | 166.8 s | 3.4 s | 49x faster |
+| `R CMD INSTALL` of the 15 recommended packages | 171.3 s | 78.0 s | 93 s (54%) less |
+| `R CMD INSTALL` of Matrix | 50.7 s | 21.5 s | 58% less |
+| `R CMD INSTALL` of mgcv | 41.6 s | 12.2 s | 71% less |
 
 - With GNU R, the byte-code compilation is 42% of the time of
-  `R CMD INSTALL`. With crbcc, it is 1.5%. The other time, for example to
-  compile the C code (`make -j8`) and to make the help pages, is the same
-  for the two compilers.
-- The geometric mean of the speedups of the closures is 62x.
-- For all 17,598 closures, the byte code of crbcc is the same as the byte
-  code of GNU R. These are the closures of the package namespaces and the
-  closures that R compiles during `R CMD INSTALL`, also the S4 methods.
+  `R CMD INSTALL` (55% for the recommended packages). With crbcc, it is
+  1.5%. The other time, for example to make the lazy-load database and the
+  help pages, is the same for the two compilers.
+- The geometric mean of the speedups of the 23,918 closures is 41x.
+- For all 46,129 closures of the 158 packages in the benchmark Docker
+  image, the crbcc byte code is the same as the GNU R byte code. These are
+  the closures that R compiles during `R CMD INSTALL`, also the S4 methods.
 
-To make these results, run
-`crbcc_bench.py --packages base --packages recommended` (see
+The benchmarks in `inst/benchmarks` made these results (see
 [Tests and benchmarks](#tests-and-benchmarks)).
 
 [![Compile time of each closure with GNU R and crbcc](https://prl-prg.github.io/crbcc/closures-time-by-size.png)](https://prl-prg.github.io/crbcc/)
 
 The figure shows the time to compile each closure with GNU R and with
-crbcc, by the size of the closure. The closures are from the R base packages
-and from MASS, Matrix, lattice, mgcv and survival. The CI makes the figure
-again for each push to `main`. The
+crbcc, by the size of the closure. The closures are from the 65 benchmark
+packages. The CI makes the figure again for each push to `main`. The
 [benchmark report](https://prl-prg.github.io/crbcc/) gives all the results
 of the CI.
 
@@ -177,39 +181,54 @@ base and recommended packages with crbcc and with the GNU R compiler, and
 compares the results.
 
 `inst/benchmarks/crbcc_bench.py` compares crbcc with the GNU R compiler. It
-measures the compile time and the result of the compilation of package
-closures, and the time of `R CMD INSTALL`. The script needs
-[uv](https://docs.astral.sh/uv/). It keeps the R libraries in the work
-directory, and uses the crbcc in `pkg-lib/`. The R code of the benchmarks is
-in `R/dev.R` (`crbcc:::bench_package`, `crbcc:::bench_functions`,
-`crbcc:::bench_closure`) and in `inst/r-cmd-install-hook.R`.
-`inst/benchmarks/crbcc_bench.Rmd` makes the report. It needs the R packages
-rmarkdown, dplyr, tidyr and ggplot2. The docstring of `crbcc_bench.py` gives
-the suites and the metrics of the report.
+installs each package with `R CMD INSTALL`, and the hook
+`inst/r-cmd-install-hook.R` measures the compile time of each closure. In
+the Docker image, the script also runs the suite `check`. This suite
+installs each package one time with crbcc, and compares the byte code of
+each closure with the GNU R byte code. The suite `install` measures the
+time and does not compare, because the comparison adds time. The script
+keeps the R libraries in the work directory, and uses the crbcc in
+`pkg-lib/`. To run the script, install [uv](https://docs.astral.sh/uv/).
+`inst/benchmarks/crbcc_bench.Rmd` makes the report from the results of the
+suites `install` and `check`. The suite `check` runs only in the Docker
+image, thus make the report in the image. The section "Reproduce" of the
+report gives the commands. The docstring of `crbcc_bench.py` gives the
+metrics of the report.
 
-To run the benchmarks and make the report, run these commands in a work
+To run the benchmarks without the Docker image, run these commands in a work
 directory:
 
 ```bash
 mkdir -p pkg-lib
 R-4.6.2/bin/R CMD INSTALL --library=pkg-lib crbcc
 crbcc/inst/benchmarks/crbcc_bench.py --r R-4.6.2/bin/R --csv results.csv
-Rscript -e 'rmarkdown::render("crbcc/inst/benchmarks/crbcc_bench.Rmd", output_dir = ".", knit_root_dir = getwd())'
 ```
 
-By default, the benchmarks use the R base packages. For more packages, use
-`--packages small` (MASS, Matrix, lattice, mgcv and survival),
-`--packages recommended` or `--packages cran50`. Only these packages have
-the install suites. If R does not have the recommended packages, the script
-installs them from `src/library/Recommended`. Thus R must then be a build in
-the R source tree. The script downloads the other package sources from a
-CRAN snapshot. For the other options, use `--help`. The CI workflow
-`.github/workflows/ci.yml` runs the benchmarks with the packages base and
-small, without the suite install-fn, for each push and pull request.
+By default, the benchmarks use the packages MASS, Matrix, lattice, mgcv and
+survival (`--packages small`). For more packages, use
+`--packages recommended`, `--packages cran100` (the packages in
+`inst/benchmarks/docker/cran100.txt`) or `--packages top50` (the first 50
+packages of cran100). If R does not have the recommended
+packages, the script installs them from `src/library/Recommended`. Thus R
+must then be a build in the R source tree. The script downloads the other
+package sources from a CRAN snapshot. For the other options, use `--help`.
 
-The install suites use the benchmark modes of the hook
-`inst/r-cmd-install-hook.R` (`CRBCC_MODE`). The comments in the hook give
-the modes.
+The Docker image `ghcr.io/prl-prg/crbcc-benchmarks` has R, the packages
+cran100 and recommended, and their dependencies. The image build installs
+each package one time with GNU R and keeps the compiled code. Then it
+installs each package one more time with GNU R, and keeps the GNU R byte
+code for the suite `check`. In the image, use
+`--prebuilt /opt/crbcc-benchmarks`. Then `R CMD INSTALL` does not compile
+the native code again. With `--prebuilt`, `--packages all` selects all
+packages in the image. A run of the suite `check` is a failure if a closure
+has a different byte code. `inst/benchmarks/docker/Dockerfile` tells how to
+build the image. For each push and pull request, the CI workflow
+`.github/workflows/ci.yml` runs the suite `check` with crbcc for all
+packages in this image. It also runs the suite `install` with gnur and
+crbcc on the same runner, for the packages top50 and recommended.
+
+The comments in `inst/r-cmd-install-hook.R` give the hook modes
+(`CRBCC_MODE`) that the benchmarks use.
 
 To profile the compilation of one closure with an external profiler:
 
