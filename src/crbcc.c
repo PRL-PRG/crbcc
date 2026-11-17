@@ -585,8 +585,8 @@ static void get_loc_file_line(Loc loc, const char **file, int *line) {
     return;
   }
 
-  SEXP getSrcFilename = R_getVarEx(utils_ns, Rf_install("getSrcFilename"), TRUE, R_UnboundValue);
-  SEXP getSrcLocation = R_getVarEx(utils_ns, Rf_install("getSrcLocation"), TRUE, R_UnboundValue);
+  SEXP getSrcFilename = R_getVarEx(Rf_install("getSrcFilename"), utils_ns, TRUE, R_UnboundValue);
+  SEXP getSrcLocation = R_getVarEx(Rf_install("getSrcLocation"), utils_ns, TRUE, R_UnboundValue);
 
   if (getSrcFilename != R_UnboundValue) {
     int err = 0;
@@ -2201,7 +2201,8 @@ void cmp_sym(SEXP sym, CodeBuffer *cb, CompilerContext *cntxt, bool missing_ok) 
   }
 
   if (is_ddsym(sym)) {
-    if (!find_loc_var(sym, cntxt)) {
+    // ..1 is correct if ... is a local variable, as in cmpSym of GNU R.
+    if (!find_loc_var(R_DotsSymbol, cntxt)) {
       notify_wrong_dots_use(sym, cntxt, cb_savecurloc(cb));
     }
 
@@ -3936,6 +3937,9 @@ void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, Com
   SEXP acall_args = PROTECT(copy_spine_and_append_value(CDDR(place), vexpr));
 
   SEXP another_inner = PROTECT(LCONS(tmp_name, acall_args));
+  // Keep the tag of the first argument, as GNU R does, for example x in
+  // `f<-`(x = *tmp*, value = value).
+  SET_TAG(another_inner, TAG(CDR(place)));
   SEXP acall = PROTECT(LCONS(afun, another_inner));
 
   CompilerContext *ncntxt = make_call_ctx(cntxt, acall);
@@ -3944,6 +3948,7 @@ void cmp_setter_call(SEXP place, SEXP origplace, SEXP vexpr, CodeBuffer *cb, Com
   SEXP cexpr_args = PROTECT(copy_spine_and_append_value(CDDR(origplace), vexpr));
 
   SEXP third_inner = PROTECT(LCONS(CADR(origplace), cexpr_args));
+  SET_TAG(third_inner, TAG(CDR(origplace)));
   SEXP cexpr = PROTECT(LCONS(afun, third_inner));
 
   cb_setcurexpr(cb, cexpr);
