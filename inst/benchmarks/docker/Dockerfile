@@ -8,14 +8,8 @@
 # The image tag is a hash of this directory and of inst/r-cmd-install-hook.R,
 # because the hook saves the GNU R byte code. If you change one of these files,
 # build and push a new image. The CI uses the image tag of its commit. To
-# build and push the image, commit the files. Then run these commands in the
-# crbcc source directory:
-#
-#   tag=$(git rev-parse HEAD:inst/benchmarks/docker HEAD:inst/r-cmd-install-hook.R |
-#         git hash-object --stdin | cut -c1-12)
-#   docker build --platform linux/amd64 -f inst/benchmarks/docker/Dockerfile \
-#     -t ghcr.io/prl-prg/crbcc-benchmarks:$tag .
-#   docker push ghcr.io/prl-prg/crbcc-benchmarks:$tag
+# build and push the image, commit the files. Then run make and make push in
+# this directory (refer to the Makefile).
 
 FROM rocker/r-ver:4.6.2
 

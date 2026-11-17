@@ -1,5 +1,6 @@
 ## Installs the benchmark packages one time with GNU R, and saves the GNU R
-## byte code for the suite check.
+## byte code for the suite check. The installations are parallel, with one
+## R CMD INSTALL for each CPU.
 ##
 ## The packages are the CRAN packages in cran100.txt, the recommended
 ## packages and all their dependencies. The script keeps the source tree of
@@ -18,8 +19,6 @@
 ## Output in $CRBCC_BENCHMARKS:
 ##   lib/          the installed packages
 ##   prebuilt/     <package>.tar.gz, the source trees with the compiled code
-##   build.csv     the times of the first installation with GNU R: elapsed,
-##                 native and bytecode (s)
 ##   bytecode/     <package>.rds, the GNU R byte code of each closure
 
 here     <- commandArgs(trailingOnly = TRUE)[1]
@@ -63,14 +62,22 @@ tarball <- setNames(files[, 2], files[, 1])
 hook <- file.path(here, "r-cmd-install-hook.R")
 env  <- c(paste0("R_LIBS=", lib), "MAKEFLAGS=-j8",
           paste0("R_PROFILE_USER=", hook), "CRBCC_MODE=bench_gnur")
-rbc  <- function(out, name) {
-  v <- as.numeric(sub(".*: ", "", grep(paste0("^RBC ", name, ": "), out, value = TRUE)))
-  if (length(v) == 0) NA else sum(v)
+
+## Calls f(p) for each package p in parallel. Stops at the first error.
+each_package <- function(pkgs, f) {
+  res <- parallel::mclapply(pkgs, f, mc.cores = parallel::detectCores(),
+                            mc.preschedule = FALSE)
+  if (length(err <- Filter(function(r) inherits(r, "try-error"), res)) > 0)
+    stop(err[[1]], call. = FALSE)
 }
 
-rows <- vector("list", length(order))
-for (i in seq_along(order)) {
-  p <- order[i]
+## The level of a package is 1 + the maximum level of its dependencies.
+## The packages of one level do not depend on each other, thus they can
+## install in parallel.
+level <- setNames(integer(length(order)), order)
+for (p in order) level[[p]] <- max(0L, level[intersect(direct[[p]], all)] + 1L)
+
+install_source <- function(p) {
   untar(tarball[[p]], exdir = build)
   t0  <- Sys.time()
   out <- suppressWarnings(system2(file.path(R.home("bin"), "R"),
@@ -85,11 +92,9 @@ for (i in seq_along(order)) {
   if (system2("tar", c("czf", file.path(prebuilt, paste0(p, ".tar.gz")), "-C", build, p)) != 0)
     stop("tar cannot pack ", p)
   unlink(file.path(build, p), recursive = TRUE)
-  rows[[i]] <- data.frame(package = p, version = db[p, "Version"], elapsed = elapsed,
-                          native = rbc(out, "native"), bytecode = rbc(out, "bytecode"))
-  message(sprintf("[%d/%d] %s %.1f s", i, length(order), p, elapsed))
+  message(sprintf("[level %d] %s %.1f s", level[[p]], p, elapsed))
 }
-write.csv(do.call(rbind, rows), file.path(root, "build.csv"), row.names = FALSE)
+for (l in sort(unique(level))) each_package(order[level == l], install_source)
 
 ## Byte code ----------------------------------------------------------------
 
@@ -98,12 +103,15 @@ bytecode <- file.path(root, "bytecode")
 dir.create(target)
 dir.create(bytecode)
 
-## The hook copies the shared objects from lib, thus make does not run.
+## The hook copies the shared objects from lib, thus make does not run. lib
+## has all packages, thus all installations are parallel. Each package has
+## its own target library, as in the suite check of crbcc_bench.py.
 env_bytecode <- c(env, paste0("CRBCC_PREBUILT_LIB=", lib),
                   paste0("CRBCC_SAVE_BYTECODE=", bytecode))
-for (p in order) {
+save_bytecode <- function(p) {
+  dir.create(file.path(target, p))
   out <- suppressWarnings(system2(file.path(R.home("bin"), "R"),
-    c("CMD", "INSTALL", "--no-configure", paste0("--library=", target),
+    c("CMD", "INSTALL", "--no-configure", paste0("--library=", file.path(target, p)),
       file.path(prebuilt, paste0(p, ".tar.gz"))),
     stdout = TRUE, stderr = TRUE, env = env_bytecode))
   if (!is.null(status <- attr(out, "status")) && status != 0) {
@@ -112,3 +120,4 @@ for (p in order) {
   }
   message(sprintf("bytecode %s: %d closures", p, length(grep("^RBC fn\t", out))))
 }
+each_package(order, save_bytecode)
