@@ -2,7 +2,7 @@
 #'
 #' Compiles an R function to bytecode using a C-based compiler.
 #'
-#' @param fun A closure to be compiled to bytecode. If fun is a builtin or
+#' @param f A closure to be compiled to bytecode. If f is a builtin or
 #'   special function, cmpfun returns it without a change.
 #' @param options A list of compilation options. If options is NULL, cmpfun
 #'   uses the default options. As in compiler::cmpfun, options can also be a
@@ -11,12 +11,12 @@
 #' @return bytecode compiled function
 #'
 #' @export
-cmpfun <- function(fun, options = list()) {
+cmpfun <- function(f, options = NULL) {
   # The same as compiler::cmpfun.
-  if (typeof(fun) %in% c("builtin", "special")) {
-    return(fun)
+  if (typeof(f) %in% c("builtin", "special")) {
+    return(f)
   }
-  if (!is_closure(fun)) {
+  if (!is_closure(f)) {
     stop("cannot compile a non-function")
   }
 
@@ -28,7 +28,7 @@ cmpfun <- function(fun, options = list()) {
     options <- sapply(nms, function(n) options[[n]], simplify = FALSE)
   }
 
-  .Call(C_cmpfun, fun, options)
+  .Call(C_cmpfun, f, options)
 }
 
 #' Check if Object is a Closure
