@@ -39,6 +39,21 @@ test: install
 	  $(R) -f $$f || exit 1; \
 	done
 
+# Installs each package of the benchmark image with crbcc, and compares the
+# byte code of each closure with the GNU R byte code in the image (the suite
+# check of inst/benchmarks/crbcc_bench.py). Run this target in the image. The
+# results are in bench/check.csv.
+.PHONY: test-compile-all-packages
+test-compile-all-packages:
+	@test -n "$$CRBCC_BENCHMARKS" || \
+	  { echo "error: run this target in the benchmark image"; exit 1; }
+	mkdir -p bench/pkg-lib
+	cd bench && $(R) CMD build --no-build-vignettes .. && \
+	  $(R) CMD INSTALL --library=pkg-lib $(PACKAGE_TAR) && \
+	  uv run --script ../inst/benchmarks/crbcc_bench.py --r "$$(command -v $(R))" \
+	    --prebuilt "$$CRBCC_BENCHMARKS" --include '^check/' -j "$$(nproc)" \
+	    --packages all --no-progress --csv check.csv
+
 # The benchmark image (inst/benchmarks/docker). The tag is a hash of
 # inst/benchmarks/docker and of the hook in HEAD. The CI uses the same tag
 # (make image-tag). Thus commit the changes to these files before the

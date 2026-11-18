@@ -6,8 +6,9 @@
 #   test       Runs R CMD check of the package source on Linux and macOS. The
 #              check runs tests/compare.R. If the check gives an ERROR or a
 #              WARNING, the job is a failure.
-#   check      Runs the suite check of inst/benchmarks/crbcc_bench.py in the
-#              image ghcr.io/prl-prg/crbcc-benchmarks (inst/benchmarks/docker).
+#   check      Runs make test-compile-all-packages (the suite check of
+#              inst/benchmarks/crbcc_bench.py) in the image
+#              ghcr.io/prl-prg/crbcc-benchmarks (inst/benchmarks/docker).
 #              The suite installs all packages in the image one time with
 #              crbcc, and compares the byte code of each closure with the
 #              GNU R byte code in the image. The installations are parallel,
@@ -110,19 +111,8 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: package
-          path: bench
       - name: Check
-        working-directory: bench
-        run: |
-          mkdir pkg-lib
-          R CMD INSTALL --library=pkg-lib crbcc_*.tar.gz
-          uv run --script ../inst/benchmarks/crbcc_bench.py --r "$(which R)" \
-            --prebuilt "$CRBCC_BENCHMARKS" --include '^check/' -j "$(nproc)" \
-            --packages all \
-            --no-progress --csv check.csv
+        run: make test-compile-all-packages
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
