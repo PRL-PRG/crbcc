@@ -66,18 +66,13 @@ compile <- function(e, env = .GlobalEnv, options = NULL, srcref = NULL) {
 #' @param outfile Path to the output file.
 #' @param ascii Logical; whether to write an ASCII file.
 #' @param env The top-level environment in which to evaluate expressions (default: .GlobalEnv).
-#' @param verbose Logical; Not yet implemented, print compilation progress messages.
+#' @param verbose Logical; if \code{TRUE}, print the progress of the compilation.
 #' @param options List of compilation options.
 #' @param version Optional file format version.
 #'
 #' @return Invisible NULL. Output is written to file as a side effect.
 #' @export
 cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = FALSE, options = NULL, version = NULL) {
-
-  if (verbose) {
-    warning("verbose not yet implemented, defaulting to false")
-    verbose <- FALSE
-  }
 
   if (missing(outfile)) {
     basename <- sub("\\.[a-zA-Z0-9]$", "", infile)
@@ -106,11 +101,23 @@ cmpfile <- function(infile, outfile, ascii = FALSE, env = .GlobalEnv, verbose = 
     }
 
     cforms <- vector("list", nforms)
-    cforms <- .Call(C_cmpfile, env, options, forms, nforms, cforms, srefs, verbose)
+    # C calls report(i) before it compiles form i. The print code is a copy
+    # of compiler::cmpfile.
+    report <- if (verbose) function(i) {
+      e <- forms[[i]]
+      if (typeof(e) == "language" &&
+          identical(e[[1]], quote(`<-`)) &&
+          typeof(e[[3]]) == "language" &&
+          identical(e[[3]][[1]], quote(`function`)))
+        cat(paste0("compiling function \"", e[[2]], "\"\n"))
+      else
+        cat(paste("compiling expression", deparse(e, 20)[1], "...\n"))
+    }
+    cforms <- .Call(C_cmpfile, env, options, forms, nforms, cforms, srefs, report)
 
-    message(gettextf("saving to file \"%s\" ... ", outfile))
+    cat(gettextf("saving to file \"%s\" ... ", outfile))
     saveRDS(cforms, file = outfile, ascii = ascii, version = version)
-    message(gettext("done"), "\n", sep = "")
+    cat(gettext("done"), "\n", sep = "")
 
   } else
     warning("empty input file; no output written")
