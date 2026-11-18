@@ -5,7 +5,8 @@
 #' @param fun A closure to be compiled to bytecode. If fun is a builtin or
 #'   special function, cmpfun returns it without a change.
 #' @param options A list of compilation options. If options is NULL, cmpfun
-#'   uses the default options.
+#'   uses the default options. As in compiler::cmpfun, options can also be a
+#'   different object with names, for example a named vector.
 #'
 #' @return bytecode compiled function
 #'
@@ -19,8 +20,12 @@ cmpfun <- function(fun, options = list()) {
     stop("cannot compile a non-function")
   }
 
+  # compiler::cmpfun reads an option with options[[name]] if names(options)
+  # has the name. The C code reads only a list.
   if (!is.null(options) && !is.list(options)) {
-    stop("Argument 'options' must be a list")
+    nms <- c("optimize", "suppressAll", "suppressNoSuperAssignVar", "suppressUndefined")
+    nms <- nms[nms %in% names(options)]
+    options <- sapply(nms, function(n) options[[n]], simplify = FALSE)
   }
 
   .Call(C_cmpfun, fun, options)
