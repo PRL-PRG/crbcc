@@ -8,7 +8,8 @@ Compiles an R closure to bytecode using the C-based compiler backend.
 cmpfun(fun, options = list())
 }
 \arguments{
-  \item{fun}{A closure to compile to bytecode.}
+  \item{fun}{A closure to compile to bytecode. If \code{fun} is a builtin or
+    special function, \code{cmpfun} returns it without a change.}
   \item{options}{A named list of compilation options.}
 }
 \value{

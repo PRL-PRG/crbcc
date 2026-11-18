@@ -2,15 +2,20 @@
 #'
 #' Compiles an R function to bytecode using a C-based compiler.
 #'
-#' @param fun A closure to be compiled to bytecode
+#' @param fun A closure to be compiled to bytecode. If fun is a builtin or
+#'   special function, cmpfun returns it without a change.
 #' @param options A list of compilation options
 #'
 #' @return bytecode compiled function
 #'
 #' @export
 cmpfun <- function(fun, options = list()) {
+  # The same as compiler::cmpfun.
+  if (typeof(fun) %in% c("builtin", "special")) {
+    return(fun)
+  }
   if (!is_closure(fun)) {
-    stop("Argument 'fun' must be a closure (user-defined function)")
+    stop("cannot compile a non-function")
   }
 
   if (!is.list(options)) {

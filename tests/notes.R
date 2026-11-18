@@ -1,13 +1,14 @@
 ## The compiler notes of crbcc must be the same as the notes of GNU R. The
 ## test compares the text that each compiler writes to stdout and stderr,
-## and the byte code. crbcc writes the notes in English only.
+## and the result: the byte code or the error. crbcc writes the notes in
+## English only.
 invisible(Sys.setLanguage("en"))
 
 run <- function(cmp, f, options) {
   con <- textConnection("out", "w", local = TRUE)
   sink(con)
   sink(con, type = "message")
-  code <- tryCatch(cmp(f, options = options),
+  code <- tryCatch(cmp(f, options = options), error = function(e) e,
                    finally = { sink(type = "message"); sink() })
   close(con)
   list(code = code, out = out)
@@ -52,3 +53,8 @@ same(function() break)
 same(function() ..1)
 same(function(x) switch(x, a = 1, 2, 3))
 same(function(x) switch(x))
+
+## Arguments that are not closures.
+same(sum)
+same(`if`)
+same(1)
