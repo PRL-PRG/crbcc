@@ -64,38 +64,6 @@ function_size <- function(f) {
   (if (length(formals(f)) > 0) size(formals(f)) else 0) + size(body(f))
 }
 
-#' Returns the compile time of a closure
-#'
-#' `Sys.time()` has a resolution of approximately 1 us, but crbcc compiles a
-#' small closure in less than 10 us. Thus the function compiles `f` in
-#' batches, and each batch takes a minimum of `min_batch` seconds. The result
-#' is the median of the batch times, divided by the number of compilations in
-#' a batch.
-#'
-#' @param cmpfun The compile function, for example `compiler::cmpfun`.
-#' @param f A closure.
-#' @param iterations The number of batches.
-#' @param min_batch The minimum time of a batch, in seconds.
-#' @return The time of one compilation, in seconds.
-#' @noRd
-compile_time <- function(cmpfun, f, iterations = 10, min_batch = 1e-4) {
-  now <- function() as.numeric(Sys.time())
-
-  # The result does not include the first compilation. Its time gives the
-  # number of compilations in a batch.
-  t0 <- now()
-  cmpfun(f)
-  n <- max(1, ceiling(min_batch / max(now() - t0, 1e-7)))
-
-  times <- vapply(seq_len(iterations), function(i) {
-    t0 <- now()
-    for (j in seq_len(n)) cmpfun(f)
-    (now() - t0) / n
-  }, 0)
-
-  stats::median(times)
-}
-
 #' Returns the statistics of the byte code of closures
 #'
 #' The values are the sums for all code objects, for example closure bodies
@@ -157,75 +125,4 @@ bytecode_stats <- function(funs) {
   }
 
   stats
-}
-
-# Benchmarks --------------------------------------------------------------
-
-#' Measures the compile time of all closures of a package
-#'
-#' Writes these lines to stdout:
-#'   RBC compile: <s>   the time to compile all closures
-#'   RBC heap: <MB>     the maximum R heap during the compilation, minus the
-#'                      heap before it (`gc()` "max used" of Ncells and Vcells)
-#'
-#' @param package The name of the package.
-#' @param compiler "gnur" (`compiler::cmpfun`) or "crbcc" (`crbcc::cmpfun`).
-#' @noRd
-bench_package <- function(package, compiler = c("gnur", "crbcc")) {
-  cmp <- if (match.arg(compiler) == "gnur") compiler::cmpfun else cmpfun
-  funs <- package_closures(package)
-
-  m0 <- gc(reset = TRUE)
-  t0 <- Sys.time()
-  for (f in funs) cmp(f)
-  t1 <- Sys.time()
-  m1 <- gc()
-
-  cat(sprintf("RBC compile: %.6f\n", as.numeric(t1 - t0, units = "secs")))
-  # Column 2 is "used (Mb)". The last column is "max used (Mb)".
-  cat(sprintf("RBC heap: %.1f\n", sum(m1[, ncol(m1)]) - sum(m0[, 2])))
-  invisible()
-}
-
-#' Compiles one closure with GNU R and crbcc
-#'
-#' Compares the two results and measures the compile time of each compiler
-#' (`compile_time`). Writes one line to stdout, with tabs between the values:
-#'   RBC fn <key> <size> <time GNU R (s)> <time crbcc (s)>
-#' If the results are not the same (`identical_strict`), it also writes:
-#'   RBC differs: <key>
-#'
-#' @param f A closure.
-#' @param key The name of the closure in the output.
-#' @param iterations The number of batches of `compile_time`.
-#' @param options The options of `crbcc::cmpfun`.
-#' @return The result of `crbcc::cmpfun`. If crbcc stops with an error, `f`.
-#' @noRd
-bench_closure <- function(f, key, iterations = 10, options = list()) {
-  gnur  <- function(f) compiler::cmpfun(f)
-  crbcc <- function(f) cmpfun(f, options = options)
-  try_cmp <- function(cmp) tryCatch(cmp(f), error = function(e) f)
-
-  res <- try_cmp(crbcc)
-  if (!identical_strict(try_cmp(gnur), res))
-    cat(sprintf("RBC differs: %s\n", key))
-
-  # Do not measure the time of a closure that a compiler cannot compile.
-  t <- tryCatch(c(compile_time(gnur, f, iterations), compile_time(crbcc, f, iterations)),
-                error = function(e) c(NA, NA))
-  cat(sprintf("RBC fn\t%s\t%.0f\t%.9g\t%.9g\n", key, function_size(f), t[1], t[2]))
-  res
-}
-
-#' Compiles each closure of a package with GNU R and crbcc
-#'
-#' Uses `bench_closure` for each closure. The key is the name of the closure.
-#'
-#' @param package The name of the package.
-#' @param iterations The number of batches of `compile_time`.
-#' @noRd
-bench_functions <- function(package, iterations = 10) {
-  funs <- package_closures(package)
-  for (name in names(funs)) bench_closure(funs[[name]], name, iterations)
-  invisible()
 }
