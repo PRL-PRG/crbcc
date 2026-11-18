@@ -4,7 +4,7 @@
 [![CRAN downloads](https://cranlogs.r-pkg.org/badges/grand-total/crbcc)](https://CRAN.R-project.org/package=crbcc)
 [![CI](https://github.com/PRL-PRG/crbcc/actions/workflows/ci.yml/badge.svg)](https://github.com/PRL-PRG/crbcc/actions/workflows/ci.yml)
 [![Compile speedup](https://img.shields.io/endpoint?url=https%3A%2F%2Fprl-prg.github.io%2Fcrbcc%2Fspeedup.json)](https://prl-prg.github.io/crbcc/)
-[![License: GPL (>= 2)](<https://img.shields.io/badge/license-GPL%20(%3E%3D%202)-blue>)](https://www.r-project.org/Licenses/)
+[![License: GPL (>= 2)](<https://img.shields.io/badge/license-GPL%20(%3E%3D%202)-blue>)](https://www.r-project.org/Licenses/GPL-2)
 
 `crbcc` is an R package that compiles R code to bytecode using a C implementation.
 It is intended as a fast, drop-in alternative to the base `compiler` package.
