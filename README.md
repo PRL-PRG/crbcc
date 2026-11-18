@@ -16,26 +16,16 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 ## Features
 
 - The output is the same as the output of the GNU-R compiler.
-- During `R CMD INSTALL`, crbcc compiles the closures approximately 48x
-  faster than the GNU-R compiler.
-- With crbcc, `R CMD INSTALL` of 65 R packages takes 42% less time if the
-  native code is already compiled. These are the 15 recommended packages and
-  the 50 CRAN packages with the most downloads. If the installation also
-  compiles C, C++ and Fortran code, this compilation often takes the largest
-  part of the time (41% for these packages). Then crbcc saves approximately
-  25% of the time.
-
-The [benchmark report](https://prl-prg.github.io/crbcc/) gives all the
-results.
+- It compiles the closures approximately 48x faster than the GNU-R compiler.
+- Package installation is often dominated by the native code compilation (C/C++/Fortran)
+  but even with that crbcc can save approximately 25% of the time.
 
 [![Installation time of the 15 packages with the longest GNU R installation time](https://prl-prg.github.io/crbcc/install-time-top15.png)](https://prl-prg.github.io/crbcc/#installation-time)
-
-The figure shows the installation time of the 15 benchmark packages with the
+The figure shows the installation time of the 15 packages with the
 longest GNU R installation time. The left panel is the elapsed time of
 `R CMD INSTALL`, and the right panel is the time in the byte-code compiler.
-The CI makes the figure again for each push to `main`. For all 65 packages,
-refer to [Installation time](https://prl-prg.github.io/crbcc/#installation-time)
-in the benchmark report.
+
+For more details check the [benchmark report](https://prl-prg.github.io/crbcc/).
 
 ## Requirements
 
@@ -44,13 +34,13 @@ in the benchmark report.
 
 ## Install
 
-### From CRAN
+From CRAN:
 
 ```R
 install.packages("crbcc")
 ```
 
-### From Github (latest version)
+or latest version from Github
 
 ```R
 # install.packages("pak")
@@ -113,6 +103,12 @@ R_PROFILE_USER=$(Rscript -e 'cat(crbcc::r_cmd_install_hook_path())') \
   R CMD INSTALL foo_1.0.tar.gz
 ```
 
+The [hook](https://github.com/PRL-PRG/crbcc/blob/main/inst/r-cmd-install-hook.R)
+is an `R_PROFILE_USER` file. R calls `compiler:::tryCmpfun` to compile a
+closure, during `R CMD INSTALL` and in the JIT. In each R process that reads
+the hook, the hook replaces this function with crbcc. If crbcc cannot
+compile a closure, the hook compiles it with GNU R.
+
 ## Compiler options
 
 The compiler accepts options as a named list. The options and their
@@ -128,18 +124,6 @@ has its default value.
   - `TRUE`: suppress all undefined variable/function warnings
   - `FALSE`: suppress none
   - `character()`: suppress specific names
-
-Example:
-
-```r
-opts <- list(
-  optimize = 2,
-  suppressAll = FALSE,
-  suppressUndefined = c("pi", "letters")
-)
-
-cf <- cmpfun(function(x) x + pi, options = opts)
-```
 
 ## Tests
 
@@ -174,7 +158,7 @@ native code, thus the benchmarks do not compile C, C++ and Fortran code.
 
 - [Benchmark report](https://prl-prg.github.io/crbcc/): the results of the
   last push to `main`. The source is `inst/benchmarks/crbcc_bench.Rmd`.
-- [`inst/benchmarks/README.md`](inst/benchmarks/README.md): what the
+- [`inst/benchmarks/README.md`](https://github.com/PRL-PRG/crbcc/blob/main/inst/benchmarks/README.md): what the
   benchmarks measure, how the Docker image is built, and how to run the
   benchmarks and set their parameters.
 - [bench](https://github.com/PRL-PRG/bench): the tool that runs the
