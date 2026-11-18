@@ -59,6 +59,9 @@ same(function(x) `if`(x))
 same(function() `if`())
 same(function(x) if (x) 1 else 2 + `if`(x))
 
+## NULL options are the default options, as in GNU R.
+same(function(x) zzz(x), NULL)
+
 ## Arguments that are not closures.
 same(sum)
 same(`if`)

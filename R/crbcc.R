@@ -4,7 +4,8 @@
 #'
 #' @param fun A closure to be compiled to bytecode. If fun is a builtin or
 #'   special function, cmpfun returns it without a change.
-#' @param options A list of compilation options
+#' @param options A list of compilation options. If options is NULL, cmpfun
+#'   uses the default options.
 #'
 #' @return bytecode compiled function
 #'
@@ -18,7 +19,7 @@ cmpfun <- function(fun, options = list()) {
     stop("cannot compile a non-function")
   }
 
-  if (!is.list(options)) {
+  if (!is.null(options) && !is.list(options)) {
     stop("Argument 'options' must be a list")
   }
 
