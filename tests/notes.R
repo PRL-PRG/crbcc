@@ -59,6 +59,9 @@ same(function(x) `if`(x))
 same(function() `if`())
 same(function(x) if (x) 1 else 2 + `if`(x))
 
+## The arguments of cmpfun are the same as in GNU R.
+stopifnot(identical(formals(crbcc::cmpfun), formals(compiler::cmpfun)))
+
 ## NULL options are the default options, as in GNU R.
 same(function(x) zzz(x), NULL)
 ## Options that are not a list.
