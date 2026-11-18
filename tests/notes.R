@@ -54,6 +54,11 @@ same(function() ..1)
 same(function(x) switch(x, a = 1, 2, 3))
 same(function(x) switch(x))
 
+## GNU R cannot compile a call to `if` without a then-expression.
+same(function(x) `if`(x))
+same(function() `if`())
+same(function(x) if (x) 1 else 2 + `if`(x))
+
 ## Arguments that are not closures.
 same(sum)
 same(`if`)
