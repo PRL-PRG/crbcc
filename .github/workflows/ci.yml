@@ -50,12 +50,9 @@ jobs:
       - uses: r-lib/actions/setup-pandoc@v2
       - uses: r-lib/actions/setup-r-dependencies@v2
       # The benchmark image tag is a hash of inst/benchmarks/docker and of
-      # the hook. Refer to inst/benchmarks/docker/Dockerfile.
+      # the hook. Refer to the target image-tag of the Makefile.
       - id: image
-        run: |
-          tag=$(git rev-parse HEAD:inst/benchmarks/docker HEAD:inst/r-cmd-install-hook.R |
-                git hash-object --stdin | cut -c1-12)
-          echo "image=ghcr.io/prl-prg/crbcc-benchmarks:$tag" >> "$GITHUB_OUTPUT"
+        run: echo "image=ghcr.io/prl-prg/crbcc-benchmarks:$(make -s image-tag)" >> "$GITHUB_OUTPUT"
       - name: Build
         run: R CMD build .
       - uses: actions/upload-artifact@v7
