@@ -11,3 +11,4 @@
 ^\.github$
 ^\.git-blame-ignore-revs$
 ^\.cache$
+^bench$

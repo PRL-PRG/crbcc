@@ -8,8 +8,8 @@
 # The image tag is a hash of this directory and of inst/r-cmd-install-hook.R,
 # because the hook saves the GNU R byte code. If you change one of these files,
 # build and push a new image. The CI uses the image tag of its commit. To
-# build and push the image, commit the files. Then run make and make push in
-# this directory (refer to the Makefile).
+# build and push the image, commit the files. Then run make image and
+# make image-push in the crbcc source directory (refer to the Makefile).
 
 FROM rocker/r-ver:4.6.2
 

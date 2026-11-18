@@ -13,7 +13,7 @@ params:
   ## divides their times.
   csv: "results.csv"
   ## If this value is not empty, the report writes two files for the crbcc
-  ## README to this directory: the figure closures-time-by-size.png and the
+  ## README to this directory: the figure install-time-top15.png and the
   ## shields.io badge speedup.json.
   assets: ""
 ---
@@ -56,8 +56,10 @@ theme_set(theme_minimal(base_size = 11) + theme(
   plot.background = element_rect(fill = "white", colour = NA)))
 compiler_fill   <- scale_fill_manual(values = COL, breaks = COMPILERS)
 compiler_colour <- scale_colour_manual(values = COL, breaks = COMPILERS)
-log_x <- function(...) scale_x_log10(labels = scales::label_comma(), ...)
-log_y <- function(...) scale_y_log10(labels = scales::label_comma(), ...)
+## Without drop0trailing, the labels of a duplicated axis can have a
+## different number of decimals than the labels of the main axis.
+log_x <- function(...) scale_x_log10(labels = scales::label_comma(drop0trailing = TRUE), ...)
+log_y <- function(...) scale_y_log10(labels = scales::label_comma(drop0trailing = TRUE), ...)
 
 # Read the CSV files -------------------------------------------------------
 
@@ -223,17 +225,32 @@ The bytecode share is the part of the installation time in the byte-code
 compiler. In the other time, R parses the code, makes the lazy-load database
 and the help pages, and loads the package to test it.
 
+The plot shows the installation time of each package with each compiler. The
+left panel is the elapsed time of `R CMD INSTALL`, and the right panel is the
+time in the byte-code compiler. A line connects the two compilers of a
+package, thus a long line shows a large difference. The package with the
+longest GNU R installation time is first. The X axes have a log scale.
+
 ```{r install-time-plot, fig.height = 1.5 + 0.25 * nrow(pk)}
-pk |>
-  pivot_longer(-c(package, group), names_to = c("metric", "compiler"), names_sep = "_") |>
-  mutate(package = factor(package, rev(pk$package)),
-         metric = factor(metric, c("elapsed", "bytecode"),
-                         c("elapsed time of R CMD INSTALL (s)", "byte-code compile time (s)"))) |>
-  ggplot(aes(value, package)) +
-  geom_line(aes(group = package), colour = RANGE, linewidth = 0.9) +
-  geom_point(aes(fill = compiler), shape = 21, colour = "white", size = 3.2, stroke = 0.8) +
-  compiler_fill + log_x() + labs(x = "s (log scale)", y = NULL) +
-  facet_wrap(~ metric, scales = "free_x")
+## A dot plot of the packages in p, in the order of p. The X axis is also at
+## the top, because the plot of all packages is tall.
+install_plot <- function(p) {
+  p |>
+    pivot_longer(-c(package, group), names_to = c("metric", "compiler"), names_sep = "_") |>
+    mutate(package = factor(package, rev(p$package)),
+           metric = factor(metric, c("elapsed", "bytecode"),
+                           c("elapsed time of R CMD INSTALL (s)", "byte-code compile time (s)"))) |>
+    ggplot(aes(value, package)) +
+    geom_line(aes(group = package), colour = RANGE, linewidth = 0.9) +
+    geom_point(aes(fill = compiler), shape = 21, colour = "white", size = 3.2, stroke = 0.8) +
+    compiler_fill + log_x(sec.axis = dup_axis()) + labs(x = "s (log scale)", y = NULL) +
+    facet_wrap(~ metric, scales = "free_x")
+}
+## The README shows the first 15 packages.
+if (nzchar(params$assets))
+  ggsave(file.path(params$assets, "install-time-top15.png"), install_plot(head(pk, 15)),
+         width = 9, height = 1.5 + 0.25 * 15, dpi = 120, bg = "white")
+install_plot(pk)
 ```
 
 The table has one row for each package. The largest byte-code speedup is
@@ -282,6 +299,10 @@ closures |>
             `gnur / crbcc` = times(gmean(gnur / crbcc)))
 ```
 
+The plot shows the compile time of each closure with each compiler, by the
+size of the closure. Each point is one closure. Each line connects the
+medians of the size classes of one compiler. The two axes have a log scale.
+
 ```{r fn-time-plot, fig.height = 6}
 long <- closures |>
   pivot_longer(all_of(COMPILERS), names_to = "compiler", values_to = "time") |>
@@ -289,7 +310,7 @@ long <- closures |>
 mid <- long |>
   group_by(compiler, class) |>
   summarise(size = median(size), time = median(time), .groups = "drop")
-p <- ggplot(long, aes(size, time * 1e6, colour = compiler)) +
+ggplot(long, aes(size, time * 1e6, colour = compiler)) +
   geom_point(size = 0.9, alpha = 0.3, stroke = 0) +
   geom_line(data = mid, linewidth = 0.9) +
   geom_point(data = mid, aes(fill = compiler), shape = 21, colour = "white",
@@ -298,11 +319,13 @@ p <- ggplot(long, aes(size, time * 1e6, colour = compiler)) +
   guides(colour = guide_legend(override.aes = list(alpha = 1))) +
   labs(x = "closure size (AST nodes, log scale)", y = "compile time (us, log scale)",
        subtitle = "The points are closures. The line is the median of the size class.")
-if (nzchar(params$assets))
-  ggsave(file.path(params$assets, "closures-time-by-size.png"), p,
-         width = 9, height = 5.5, dpi = 120, bg = "white")
-p
 ```
+
+The plot shows the speedup of crbcc for each closure, by the size of the
+closure. The speedup is the GNU R compile time divided by the crbcc compile
+time, thus a value above 1 shows that crbcc is faster. Each point is one
+closure. The line connects the geometric means of the size classes. The two
+axes have a log scale.
 
 ```{r fn-speedup-plot, fig.height = 4.5}
 x <- closures |> mutate(speedup = gnur / crbcc) |> filter(is.finite(speedup), speedup > 0)

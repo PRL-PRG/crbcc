@@ -40,3 +40,6 @@ compile_flags.txt
 # Development tools output
 .cache/
 /inst/benchmarks/__pycache__
+
+# Work directory of make test-compile-all-packages
+/bench/

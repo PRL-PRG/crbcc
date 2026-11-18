@@ -6,8 +6,9 @@
 #   test       Runs R CMD check of the package source on Linux and macOS. The
 #              check runs tests/compare.R. If the check gives an ERROR or a
 #              WARNING, the job is a failure.
-#   check      Runs the suite check of inst/benchmarks/crbcc_bench.py in the
-#              image ghcr.io/prl-prg/crbcc-benchmarks (inst/benchmarks/docker).
+#   check      Runs make test-compile-all-packages (the suite check of
+#              inst/benchmarks/crbcc_bench.py) in the image
+#              ghcr.io/prl-prg/crbcc-benchmarks (inst/benchmarks/docker).
 #              The suite installs all packages in the image one time with
 #              crbcc, and compares the byte code of each closure with the
 #              GNU R byte code in the image. The installations are parallel,
@@ -34,6 +35,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A new push to a pull request cancels the run of the previous push. A run on
+# main is not cancelled, because it puts the report on GitHub Pages.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -50,12 +57,9 @@ jobs:
       - uses: r-lib/actions/setup-pandoc@v2
       - uses: r-lib/actions/setup-r-dependencies@v2
       # The benchmark image tag is a hash of inst/benchmarks/docker and of
-      # the hook. Refer to inst/benchmarks/docker/Dockerfile.
+      # the hook. Refer to the target image-tag of the Makefile.
       - id: image
-        run: |
-          tag=$(git rev-parse HEAD:inst/benchmarks/docker HEAD:inst/r-cmd-install-hook.R |
-                git hash-object --stdin | cut -c1-12)
-          echo "image=ghcr.io/prl-prg/crbcc-benchmarks:$tag" >> "$GITHUB_OUTPUT"
+        run: echo "image=ghcr.io/prl-prg/crbcc-benchmarks:$(make -s image-tag)" >> "$GITHUB_OUTPUT"
       - name: Build
         run: R CMD build .
       - uses: actions/upload-artifact@v7
@@ -113,19 +117,8 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
-        with:
-          name: package
-          path: bench
       - name: Check
-        working-directory: bench
-        run: |
-          mkdir pkg-lib
-          R CMD INSTALL --library=pkg-lib crbcc_*.tar.gz
-          uv run --script ../inst/benchmarks/crbcc_bench.py --r "$(which R)" \
-            --prebuilt "$CRBCC_BENCHMARKS" --include '^check/' -j "$(nproc)" \
-            --packages all \
-            --no-progress --csv check.csv
+        run: make test-compile-all-packages
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
