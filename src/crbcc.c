@@ -3231,6 +3231,17 @@ bool inline_return(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 bool inline_if(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
+  // The handler of GNU R stops with the error of e[[2]] or e[[3]]. R makes
+  // the same error here.
+  if (Rf_length(e) < 3) {
+    SEXP env = PROTECT(R_NewEnv(R_BaseEnv, FALSE, 0));
+    Rf_defineVar(Rf_install("e"), e, env);
+    SEXP index = PROTECT(Rf_ScalarReal(Rf_length(e) + 1));
+    SEXP expr = PROTECT(Rf_lang3(R_Bracket2Symbol, Rf_install("e"), index));
+    Rf_eval(expr, env);
+    UNPROTECT(3); // env, index, expr
+  }
+
   SEXP test = CADR(e);
   SEXP then = CADDR(e);
   SEXP eelse = R_NilValue;
