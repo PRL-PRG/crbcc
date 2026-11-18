@@ -395,8 +395,7 @@ SEXP cmpfun(SEXP f, SEXP compiler_options);
 
 // Misc
 bool find_var(SEXP var, CompilerContext *cntxt);
-NamesList find_locals(SEXP expr, NamesList known_locals, CompilerContext *cntxt);
-NamesList find_locals_list(SEXP elist, NamesList known_locals, CompilerContext *cntxt);
+NamesList find_locals_list(SEXP elist, SEXP e, CompilerContext *cntxt);
 SEXP gen_code(SEXP e, CompilerContext *cntxt, Loc loc);
 const char *get_assigned_var(SEXP var, CompilerContext *cntxt);
 bool may_call_browser(SEXP expr, CompilerContext *cntxt);
@@ -407,7 +406,7 @@ bool find_loc_var(SEXP var, CompilerContext *cntxt);
 SEXP code_buf_code(CodeBuffer *cb, CompilerContext *cntxt);
 bool is_ddsym(SEXP sym);
 SEXP find_fun_def(SEXP fun_sym, CompilerContext *cntxt);
-bool check_call(SEXP def, SEXP call, bool *should_warn);
+bool check_call(SEXP def, SEXP call, const char **emsg);
 bool any_dots(SEXP args);
 static bool is_base_var(SEXP sym, CompilerContext *cntxt);
 static SEXP R_bcVersion();
@@ -642,7 +641,8 @@ static void cntxt_warn(const char *msg, CompilerContext *cntxt, Loc loc) {
   (void) cntxt;
 
   char *full = add_loc_string(msg, loc);
-  Rprintf("Note: %s\n", full);
+  // GNU R writes cat(paste("Note:", msg, "\n")) which will add space before "\n".
+  Rprintf("Note: %s \n", full);
 }
 
 static void cntxt_stop(const char *msg, CompilerContext *cntxt, Loc loc) {
@@ -749,16 +749,8 @@ static void notify_local_fun(SEXP fun, CompilerContext *cntxt, Loc loc) {
   (void) loc;
 }
 
-static void notify_bad_call(SEXP call, CompilerContext *cntxt, Loc loc) {
+static void notify_bad_call(const char *msg, CompilerContext *cntxt, Loc loc) {
   if (cntxt->options.suppress_all) return;
-
-  const char *call_name = "<call>";
-  if (TYPEOF(call) == LANGSXP && TYPEOF(CAR(call)) == SYMSXP) {
-    call_name = CHAR(PRINTNAME(CAR(call)));
-  }
-
-  char msg[512];
-  snprintf(msg, sizeof(msg), "possible error in '%s': argument matching failed", call_name);
   cntxt_warn(msg, cntxt, loc);
 }
 
@@ -778,7 +770,16 @@ static void notify_assign_syntactic_fun(NamesList funs, CompilerContext *cntxt, 
 
   const char *prefix = (funs.count == 1)
                            ? "local assignment to syntactic function:  "
-                           : "local assignments to syntactic functions: ";
+                           : "local assignments to syntactic functions:  ";
+
+  // GNU R gives the names in the order of ls(), thus sort them with sort().
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, funs.count));
+  for (int i = 0; i < funs.count; i++)
+    SET_STRING_ELT(names, i, Rf_mkChar(funs.vars[i]));
+  SEXP sort_call = PROTECT(Rf_lang2(Rf_install("sort"), names));
+  SEXP sorted = PROTECT(Rf_eval(sort_call, R_BaseEnv));
+  for (int i = 0; i < funs.count; i++)
+    funs.vars[i] = CHAR(STRING_ELT(sorted, i));
 
   int total_len = (int) strlen(prefix) + 1;
   for (int i = 0; i < funs.count; i++) {
@@ -796,6 +797,7 @@ static void notify_assign_syntactic_fun(NamesList funs, CompilerContext *cntxt, 
   }
 
   cntxt_warn(msg, cntxt, loc);
+  UNPROTECT(3); // names, sort_call, sorted
 }
 
 static char *format_bad_assignment_msg(SEXP expr) {
@@ -1520,12 +1522,71 @@ static SEXP eval_match_call(SEXP def, SEXP call, bool expand_dots, bool *had_err
   return matched_call;
 }
 
-bool check_call(SEXP def, SEXP call, bool *should_warn) {
+// data is { def, call }.
+static SEXP check_call_match(void *data) {
+  SEXP *dc = (SEXP *) data;
+  SEXP quoted_call = PROTECT(Rf_lang2(Rf_install("quote"), dc[1]));
+  SEXP expr = PROTECT(Rf_lang3(Rf_install("match.call"), dc[0], quoted_call));
+  Rf_eval(expr, R_BaseEnv);
+  UNPROTECT(2);
+  return R_NilValue;
+}
+
+// R_tryEval writes the error message to the console. GNU R does not.
+static SEXP check_call_error(SEXP cond, void *data) {
+  (void) data;
+  SEXP expr = PROTECT(Rf_lang2(Rf_install("conditionMessage"), cond));
+  SEXP msg = Rf_eval(expr, R_BaseEnv);
+  UNPROTECT(1);
+  return msg;
+}
+
+// Returns true if match.call(def, call) cannot fail: each tag of the call is
+// the name of a different formal, and each positional argument has a formal
+// or `...`. A false value does not tell that match.call() fails. The call has
+// no `...` argument. The check prevents a tryCatch() for each call.
+static bool call_args_match(SEXP def, SEXP call) {
+  bool has_dots = false;
+  int nformals = 0;
+  SEQ_ALONG(f, R_ClosureFormals(def)) {
+    if (TAG(f) == R_DotsSymbol) has_dots = true;
+    nformals++;
+  }
+
+  int ntagged = 0, nuntagged = 0;
+  SEQ_ALONG(a, CDR(call)) {
+    SEXP tag = TAG(a);
+    if (tag == R_NilValue) {
+      nuntagged++;
+      continue;
+    }
+    if (tag == R_DotsSymbol) return false;
+
+    bool is_formal = false;
+    SEQ_ALONG(f, R_ClosureFormals(def)) {
+      if (TAG(f) == tag) {
+        is_formal = true;
+        break;
+      }
+    }
+    if (!is_formal) return false;
+
+    for (SEXP b = CDR(call); b != a; b = CDR(b))
+      if (TAG(b) == tag) return false;
+    ntagged++;
+  }
+
+  return has_dots || nuntagged <= nformals - ntagged;
+}
+
+// Works as checkCall of GNU R. If match.call() fails and emsg is not NULL,
+// *emsg is the note of GNU R. Otherwise *emsg is NULL.
+bool check_call(SEXP def, SEXP call, const char **emsg) {
 
   int type = TYPEOF(def);
   int n_protect = 0;
 
-  if (should_warn) *should_warn = false;
+  if (emsg) *emsg = NULL;
 
   if (type == BUILTINSXP || type == SPECIALSXP) {
     SEXP args_call = PROTECT(Rf_lang2(Rf_install("args"), def));
@@ -1545,17 +1606,38 @@ bool check_call(SEXP def, SEXP call, bool *should_warn) {
     return false;
   }
 
-  bool err_occurred = false;
-  SEXP matched = eval_match_call(def, call, true, &err_occurred);
-
-  if (matched == R_NilValue && err_occurred) {
-    if (should_warn) *should_warn = true;
+  if (call_args_match(def, call)) {
     UNPROTECT(n_protect);
-    return false;
+    return true;
+  }
+
+  SEXP data[2] = { def, call };
+  SEXP err = PROTECT(R_tryCatchError(check_call_match, data, check_call_error, NULL));
+  n_protect++;
+
+  if (err == R_NilValue) {
+    UNPROTECT(n_protect);
+    return true;
+  }
+
+  if (emsg) {
+    SEXP quoted_call = PROTECT(Rf_lang2(Rf_install("quote"), call));
+    SEXP width = PROTECT(Rf_ScalarInteger(20));
+    SEXP dexpr = PROTECT(Rf_lang3(Rf_install("deparse"), quoted_call, width));
+    SEXP dcall = PROTECT(Rf_eval(dexpr, R_BaseEnv));
+    n_protect += 4;
+
+    const char *c = CHAR(STRING_ELT(dcall, 0));
+    const char *m = CHAR(STRING_ELT(err, 0));
+    const char *fmt = "possible error in '%s': %s";
+    size_t len = strlen(fmt) + strlen(c) + strlen(m) + 1;
+    char *msg = R_alloc(len, sizeof(char));
+    snprintf(msg, len, fmt, c, m);
+    *emsg = msg;
   }
 
   UNPROTECT(n_protect);
-  return true;
+  return false;
 }
 
 bool is_ddsym(SEXP sym) {
@@ -1717,112 +1799,111 @@ static NamesList union_sets(NamesList a, NamesList b) {
   return ret;
 }
 
-NamesList find_locals_list(SEXP elist, NamesList known_locals, CompilerContext *cntxt) {
-
-  NamesList found = { NULL, 0 };
-
-  if ((TYPEOF(elist) == LANGSXP) || (TYPEOF(elist) == LISTSXP)) {
-    // Iterate over expressions in the list - pairlist iteration
-    SEXP node = elist;
-    while (node != R_NilValue) {
-
-      SEXP expr = CAR(node);
-      NamesList new_vars = find_locals(expr, known_locals, cntxt);
-
-      if (new_vars.count != 0) {
-        if (found.count == 0)
-          found = new_vars;
-        else
-          found = union_sets(found, new_vars);
-      }
-
-      node = CDR(node);
-    }
-  }
-
-  // cmpfile case - vector iteration
-  if (TYPEOF(elist) == EXPRSXP) {
-
-    int len = Rf_length(elist);
-
-    for (int i = 0; i < len; i++) {
-
-      SEXP item = VECTOR_ELT(elist, i);
-      NamesList new_vars = find_locals(item, known_locals, cntxt);
-
-      if (new_vars.count != 0) {
-        if (found.count == 0)
-          found = new_vars;
-        else
-          found = union_sets(found, new_vars);
-      }
-    }
-  }
-
-  return found;
+static bool names_contain(NamesList names, const char *name) {
+  for (int i = 0; i < names.count; i++)
+    if (strcmp(names.vars[i], name) == 0) return true;
+  return false;
 }
 
-NamesList find_locals(SEXP expr, NamesList known_locals, CompilerContext *cntxt) {
+// Adds the symbol name of name to vars. union_sets() compares the pointers.
+static void add_local(NamesList *vars, const char *name) {
+  const char *v = CHAR(PRINTNAME(Rf_install(name)));
+  NamesList one = { (const char **) R_alloc(1, sizeof(const char *)), 1 };
+  one.vars[0] = v;
+  *vars = union_sets(*vars, one);
+}
 
-  NamesList ret;
-  ret.count = 0;
-  ret.vars = NULL;
+// Works as findLocals1 of GNU R. The search of a call to a function in
+// shadowed includes its arguments. Otherwise, the search does not include
+// the arguments of quote(), expression() and local().
+static void find_locals1(SEXP e, NamesList shadowed, CompilerContext *cntxt, NamesList *vars) {
 
-  if (TYPEOF(expr) != LANGSXP) return ret;
+  if (TYPEOF(e) != LANGSXP) return;
 
-  SEXP fun = CAR(expr);
+  SEXP fun = CAR(e);
+  const char *v = NULL;
+  if (TYPEOF(fun) == SYMSXP)
+    v = CHAR(PRINTNAME(fun));
+  else if (TYPEOF(fun) == STRSXP && XLENGTH(fun) == 1)
+    v = CHAR(STRING_ELT(fun, 0));
 
-  if (TYPEOF(fun) != SYMSXP)
-    return find_locals_list(expr, known_locals, cntxt);
-
-  const char *fname = CHAR(PRINTNAME(fun));
-
-  if (strcmp(fname, "<-") == 0 || strcmp(fname, "=") == 0) {
-
-    const char *var = get_assigned_var(expr, cntxt);
-
-    ret.count = 1;
-    ret.vars = (const char **) R_alloc(1, sizeof(const char *));
-    ret.vars[0] = var;
-
-    NamesList rhs_locals = find_locals(CADDR(expr), known_locals, cntxt);
-
-    return union_sets(rhs_locals, ret);
+  if (v == NULL) {
+    SEQ_ALONG(a, e)
+    find_locals1(CAR(a), shadowed, cntxt, vars);
+    return;
   }
 
-  if (strcmp(fname, "for") == 0) {
+  SEXP args = CDR(e);
 
-    const char *loop_var_raw = CHAR(PRINTNAME(CADR(expr)));
-    NamesList seq_locals = find_locals(CADDR(expr), known_locals, cntxt);
-    NamesList body_locals = find_locals(CADDDR(expr), known_locals, cntxt);
-
-    const char **loop_var_arr = (const char **) R_alloc(1, sizeof(const char *));
-    loop_var_arr[0] = loop_var_raw;
-    NamesList loop_var = { loop_var_arr, 1 };
-
-    return union_sets(union_sets(seq_locals, loop_var), body_locals);
+  if (strcmp(v, "<-") == 0 || strcmp(v, "=") == 0) {
+    add_local(vars, get_assigned_var(e, cntxt));
+  } else if (strcmp(v, "for") == 0) {
+    if (TYPEOF(CADR(e)) == SYMSXP) add_local(vars, CHAR(PRINTNAME(CADR(e))));
+    args = CDDR(e);
+  } else if (strcmp(v, "delayedAssign") == 0 || strcmp(v, "assign") == 0) {
+    // GNU R does not search the arguments of other calls to these functions.
+    SEXP name = CADR(e);
+    if (Rf_length(e) != 3 || TYPEOF(name) != STRSXP || XLENGTH(name) != 1) return;
+    add_local(vars, Rf_translateChar(STRING_ELT(name, 0)));
+    args = CDDR(e);
+  } else if (strcmp(v, "function") == 0 || strcmp(v, "~") == 0) {
+    return;
+  } else if (strcmp(v, "local") == 0) {
+    if (!names_contain(shadowed, v) && Rf_length(e) == 2) return;
+  } else if (strcmp(v, "quote") == 0 || strcmp(v, "expression") == 0) {
+    if (!names_contain(shadowed, v)) return;
   }
 
-  if (strcmp(fname, "function") == 0 ||
-      strcmp(fname, "quote") == 0 ||
-      strcmp(fname, "expression") == 0) {
+  SEQ_ALONG(a, args)
+  find_locals1(CAR(a), shadowed, cntxt, vars);
+}
 
-    const char *cmpname = CHAR(PRINTNAME(fun));
-    bool found = false;
+// Works as findLocalsList of GNU R. Returns the variables that the elements
+// of elist (a pairlist or an expression vector) and e can assign.
+NamesList find_locals_list(SEXP elist, SEXP e, CompilerContext *cntxt) {
 
-    for (int i = 0; i < known_locals.count; i++) {
+  const char *initial[] = { "expression", "local", "quote" };
+  NamesList shadowed = { (const char **) R_alloc(3, sizeof(const char *)), 0 };
+  NamesList sf = { (const char **) R_alloc(3, sizeof(const char *)), 3 };
+  for (int i = 0; i < 3; i++) {
+    sf.vars[i] = initial[i];
+    if (!is_base_var(Rf_install(initial[i]), cntxt))
+      shadowed.vars[shadowed.count++] = initial[i];
+  }
 
-      if (strcmp(cmpname, known_locals.vars[i]) == 0) {
-        found = true;
-        break;
-      }
+  while (true) {
+    NamesList vals = { NULL, 0 };
+    if (TYPEOF(elist) == EXPRSXP) {
+      for (R_xlen_t i = 0; i < XLENGTH(elist); i++)
+        find_locals1(VECTOR_ELT(elist, i), sf, cntxt, &vals);
+    } else {
+      SEQ_ALONG(a, elist)
+      find_locals1(CAR(a), sf, cntxt, &vals);
     }
+    find_locals1(e, sf, cntxt, &vals);
 
-    if (!found)
-      return ret;
+    // sf <- unique(c(shadowed, sf[sf %in% vals]))
+    NamesList next = { (const char **) R_alloc(3, sizeof(const char *)), 0 };
+    for (int i = 0; i < shadowed.count; i++)
+      next.vars[next.count++] = shadowed.vars[i];
+    for (int i = 0; i < sf.count; i++)
+      if (names_contain(vals, sf.vars[i]) && !names_contain(next, sf.vars[i]))
+        next.vars[next.count++] = sf.vars[i];
+
+    if (next.count == sf.count) {
+      const char *special_syntax_funs[] = { "~", "<-", "=", "for", "function", NULL };
+      NamesList rdsf = { (const char **) R_alloc(vals.count + 1, sizeof(const char *)), 0 };
+      for (int i = 0; i < vals.count; i++)
+        if (is_in_c_set(vals.vars[i], special_syntax_funs))
+          rdsf.vars[rdsf.count++] = vals.vars[i];
+      if (rdsf.count > 0) {
+        Loc nloc = { true, R_NilValue, R_NilValue };
+        notify_assign_syntactic_fun(rdsf, cntxt, nloc);
+      }
+      return vals;
+    }
+    sf = next;
   }
-
-  return find_locals_list(CDR(expr), known_locals, cntxt);
 }
 
 void add_cenv_vars(CompilerEnv *cenv, NamesList vars) {
@@ -1894,46 +1975,10 @@ CompilerEnv *make_fun_env(SEXP forms, SEXP body, CompilerContext *cntxt) {
 
   add_cenv_frame(new_cenv, extract_names(forms));
 
-  NamesList nullv = { NULL, 0 };
-  NamesList locals = find_locals_list(forms, nullv, cntxt);
-
-
-  NamesList arg_names = extract_names(forms);
-  NamesList tmp = union_sets(locals, arg_names);
-  locals = tmp;
-
-  while (true) {
-
-    NamesList new_found = find_locals(body, locals, cntxt);
-    NamesList combined = union_sets(locals, new_found);
-
-    if (combined.count == locals.count)
-      break;
-
-    locals = combined;
-  }
-
-  // Warn against special syntactic redef.
-  const char *special_syntax_funs[] = { "~", "<-", "=", "for", "function", NULL };
-  const char **syntactic = (const char **) R_alloc(locals.count, sizeof(const char *));
-  int syntactic_count = 0;
-
-  for (int i = 0; i < locals.count; i++) {
-    if (is_in_c_set(locals.vars[i], special_syntax_funs)) {
-      syntactic[syntactic_count++] = locals.vars[i];
-    }
-  }
-
-  if (syntactic_count > 0) {
-    NamesList sf;
-    sf.vars = syntactic;
-    sf.count = syntactic_count;
-    Loc nloc;
-    nloc.is_null = true;
-    nloc.expr = R_NilValue;
-    nloc.srcref = R_NilValue;
-    notify_assign_syntactic_fun(sf, cntxt, nloc);
-  }
+  // As in GNU R, the search for locals sees the frame of the formals.
+  CompilerContext fun_cntxt = *cntxt;
+  fun_cntxt.env = new_cenv;
+  NamesList locals = find_locals_list(forms, body, &fun_cntxt);
 
   add_cenv_vars(new_cenv, locals);
   return new_cenv;
@@ -2260,9 +2305,9 @@ void cmp_call(SEXP call, CodeBuffer *cb, CompilerContext *cntxt, bool inline_ok)
         if (def == R_NilValue) {
           notify_undef_fun(fun, cntxt, cb_savecurloc(cb));
         } else {
-          bool bad_call = false;
-          check_call(def, call, &bad_call);
-          if (bad_call) notify_bad_call(call, cntxt, cb_savecurloc(cb));
+          const char *emsg;
+          check_call(def, call, &emsg);
+          if (emsg) notify_bad_call(emsg, cntxt, cb_savecurloc(cb));
         }
       }
 
@@ -2849,8 +2894,7 @@ SEXP compile(SEXP e, SEXP env, SEXP options, SEXP srcref) {
   CompilerEnv *cenv = make_cenv(env);
   CompilerContext *cntxt = make_toplevel_ctx(cenv, options);
 
-  NamesList empty = { NULL, 0 };
-  add_cenv_vars(cenv, find_locals(e, empty, cntxt));
+  add_cenv_vars(cenv, find_locals_list(R_NilValue, e, cntxt));
 
   if (may_call_browser(e, cntxt))
     return e;
@@ -2864,8 +2908,7 @@ SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP 
 
   CompilerEnv *cenv = make_cenv(env);
   CompilerContext *cntxt = make_toplevel_ctx(cenv, options);
-  NamesList empty = { NULL, 0 };
-  add_cenv_vars(cenv, find_locals_list(forms, empty, cntxt));
+  add_cenv_vars(cenv, find_locals_list(forms, R_NilValue, cntxt));
 
   for (int i = 0; i < INTEGER(nforms)[0]; i++) {
 
@@ -4884,11 +4927,9 @@ bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   SEXP fun_sym = CAR(e);
   SEXP def = find_fun_def(fun_sym, cntxt);
 
-  bool should_warn = false;
-  if (!check_call(def, e, &should_warn)) {
-    if (should_warn) notify_bad_call(e, cntxt, cb_savecurloc(cb));
+  // GNU R gives no signal function to checkCall here, thus no note.
+  if (!check_call(def, e, NULL))
     return false;
-  }
 
   SEXP call = PROTECT(inline_simple_internal_call(e, def));
 

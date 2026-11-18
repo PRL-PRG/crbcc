@@ -132,6 +132,8 @@ The tests in `tests/` compare crbcc with the GNU-R compiler:
 - `tests/compare.R` compiles all closures of the base and recommended
   packages with the two compilers, and compares the byte code.
 - `tests/regressions.R` has the differences that the benchmarks found.
+- `tests/notes.R` compares the compiler notes, for example "no visible
+  binding for global variable".
 
 `R CMD check` and `make test` run these tests. The CI runs `R CMD check` on
 Linux and macOS.
@@ -166,6 +168,7 @@ native code, thus the benchmarks do not compile C, C++ and Fortran code.
 
 ## Known limitations
 
-- Warning output is not guaranteed to be 1:1 with GNU R's `compiler` package.
+- The compiler notes are in English only. GNU R translates them to the
+  language of the R session.
 - `cmpfile()` currently does not support a functional `verbose` mode (the argument exists but is not implemented).
 - Saving and loading functionality is not compatible with the GNU-R compiler, since it uses an .Internal call to manage the files.
