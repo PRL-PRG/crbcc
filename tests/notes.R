@@ -61,6 +61,10 @@ same(function(x) if (x) 1 else 2 + `if`(x))
 
 ## NULL options are the default options, as in GNU R.
 same(function(x) zzz(x), NULL)
+## Options that are not a list.
+same(function() zzz, c(suppressAll = FALSE))
+same(function() zzz, list2env(list(suppressAll = FALSE)))
+same(function() zzz, FALSE)
 
 ## Arguments that are not closures.
 same(sum)
