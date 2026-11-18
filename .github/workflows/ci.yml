@@ -35,6 +35,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A new push to a pull request cancels the run of the previous push. A run on
+# main is not cancelled, because it puts the report on GitHub Pages.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
