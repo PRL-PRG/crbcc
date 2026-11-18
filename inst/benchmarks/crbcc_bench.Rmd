@@ -138,6 +138,8 @@ if (nzchar(params$assets)) {
 }
 ```
 
+## Benchmarking
+
 crbcc compiles R code to byte code. It gives the same byte code as the
 compiler package of GNU R, but it is faster.
 
@@ -232,9 +234,9 @@ package, thus a long line shows a large difference. The package with the
 longest GNU R installation time is first. The X axes have a log scale.
 
 ```{r install-time-plot, fig.height = 1.5 + 0.25 * nrow(pk)}
-## A dot plot of the packages in p, in the order of p. The X axis is also at
-## the top, because the plot of all packages is tall.
-install_plot <- function(p) {
+## A dot plot of the packages in p, in the order of p. If top is TRUE, the X
+## axis is also at the top, because the plot of all packages is tall.
+install_plot <- function(p, top = TRUE) {
   p |>
     pivot_longer(-c(package, group), names_to = c("metric", "compiler"), names_sep = "_") |>
     mutate(package = factor(package, rev(p$package)),
@@ -243,12 +245,13 @@ install_plot <- function(p) {
     ggplot(aes(value, package)) +
     geom_line(aes(group = package), colour = RANGE, linewidth = 0.9) +
     geom_point(aes(fill = compiler), shape = 21, colour = "white", size = 3.2, stroke = 0.8) +
-    compiler_fill + log_x(sec.axis = dup_axis()) + labs(x = "s (log scale)", y = NULL) +
+    compiler_fill + log_x(sec.axis = if (top) dup_axis() else waiver()) +
+    labs(x = "s (log scale)", y = NULL) +
     facet_wrap(~ metric, scales = "free_x")
 }
 ## The README shows the first 15 packages.
 if (nzchar(params$assets))
-  ggsave(file.path(params$assets, "install-time-top15.png"), install_plot(head(pk, 15)),
+  ggsave(file.path(params$assets, "install-time-top15.png"), install_plot(head(pk, 15), top = FALSE),
          width = 9, height = 1.5 + 0.25 * 15, dpi = 120, bg = "white")
 install_plot(pk)
 ```
