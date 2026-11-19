@@ -109,6 +109,30 @@ same_warnings(function(x) nchar(x, ty = "chars"))
 same_warnings(function(x) rep_len(x, length = 3) + dnorm(x, me = 0))
 options(op)
 
+## Bodies that the parser cannot make. The error messages must be the same
+## as in GNU R, for each optimize level.
+error_of <- function(cmp, f, options)
+  tryCatch({ cmp(f, options = options); "" }, error = conditionMessage)
+same_error <- function(f) {
+  for (level in 0:3) {
+    options <- list(optimize = level)
+    stopifnot(identical(error_of(compiler::cmpfun, f, options),
+                        error_of(crbcc::cmpfun, f, options)))
+  }
+}
+f <- function() NULL
+body(f) <- call("<-", 1, 1)
+same_error(f)
+body(f) <- call("<-", call("f", 1:30 + 0.5), 1)
+same_error(f)
+body(f) <- call("<-", c("a", "b"), 1)
+same_warnings(f)
+## A call to the empty symbol.
+body(f) <- as.call(list(quote(expr = ), 1))
+same_error(f)
+body(f) <- call("<-", call("names", as.call(list(quote(expr = ), quote(x)))), 1)
+same_error(f)
+
 ## The arguments of cmpfun are the same as in GNU R.
 stopifnot(identical(formals(crbcc::cmpfun), formals(compiler::cmpfun)))
 
