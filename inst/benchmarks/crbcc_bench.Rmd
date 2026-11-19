@@ -6,12 +6,10 @@ output:
     toc_depth: 3
     df_print: kable
 params:
-  ## One or more CSV files of crbcc_bench.py --csv, separated by commas. The
-  ## files must have the suite install with gnur and crbcc, and the suite
-  ## check, for example check.csv and results.csv of the CI. The gnur and
-  ## crbcc results must come from the same machine, because the report
-  ## divides their times.
-  csv: "results.csv"
+  ## The --csv reports of crbcc_bench.py. install has the suite install, from
+  ## the image build. closures has the suites check and closures, from the CI.
+  install: "install.csv"
+  closures: "closures.csv"
   ## If this value is not empty, the report writes two files for the crbcc
   ## README to this directory: the figure install-time-top15.png and the
   ## shields.io badge speedup.json.
@@ -42,6 +40,7 @@ fmt   <- function(x, digits = 1) formatC(x, format = "f", digits = digits, big.m
 pct   <- function(x) paste0(fmt(100 * x, 0), "%")
 times <- function(x, digits = 1) paste0(fmt(x, digits), "x")
 gmean <- function(x) { x <- x[is.finite(x) & x > 0]; exp(mean(log(x))) }
+short <- function(commit) sub("^([0-9a-f]{7})[0-9a-f]{33}", "\\1", commit)
 
 theme_set(theme_minimal(base_size = 11) + theme(
   text = element_text(colour = INK2),
@@ -63,248 +62,333 @@ log_y <- function(...) scale_y_log10(labels = scales::label_comma(drop0trailing 
 
 # Read the CSV files -------------------------------------------------------
 
-files <- trimws(strsplit(params$csv, ",")[[1]])
-lines <- setNames(lapply(files, readLines), basename(files))
-all <- bind_rows(lapply(names(lines), function(f)
-  read.csv(text = grep("^#", lines[[f]], value = TRUE, invert = TRUE),
-           colClasses = "character") |> mutate(source = f))) |>
-  mutate(run = as.integer(run), value = as.numeric(value), size = as.numeric(size))
+## Returns the "# key: value" header (meta) and the rows (data) of a CSV file.
+read_bench <- function(file) {
+  lines <- readLines(file)
+  meta <- sub("^# ", "", grep("^#", lines, value = TRUE))
+  data <- read.csv(text = grep("^#", lines, value = TRUE, invert = TRUE),
+                   colClasses = "character")
+  list(file = basename(file),
+       meta = as.list(setNames(sub("^[^:]*: ", "", meta), sub(": .*", "", meta))),
+       data = mutate(data, run = as.integer(run), value = as.numeric(value)))
+}
+ins <- read_bench(params$install)
+clo <- read_bench(params$closures)
 
-failed <- all |> filter(failure != "") |> distinct(suite, benchmark, compiler, run, failure)
-## The suite install without the failed runs.
-d <- all |> filter(suite == "install", failure == "")
-## The suite check: the check result and the size of each crbcc closure. The
-## failed runs stay, because they have the closures with a different byte code.
-chk <- all |> filter(suite == "check", metric == "time")
-if (!all(COMPILERS %in% d$compiler) || nrow(chk) == 0)
-  stop("The CSV files must have the suite install with gnur and crbcc, and the suite check.")
+## A run with a failure still has its rows. The statistics do not use them.
+RUN <- c("suite", "benchmark", "compiler", "run")
+failed_runs <- function(d) d |> filter(failure != "") |> distinct(across(all_of(RUN)), failure)
+passed <- function(d) anti_join(d, failed_runs(d), by = RUN)
+failed_table <- function(d) {
+  f <- failed_runs(d)
+  if (nrow(f) > 0)
+    knitr::kable(mutate(f, failure = gsub("\\s+", " ", failure)),
+                 caption = "Failed runs. The statistics do not use these runs.")
+}
 
-runs <- tapply(d$run, d$compiler, n_distinct)
-src  <- tapply(d$source, d$compiler, function(x) x[1])
-## The check result of each closure. If more than one R process of an
-## installation compiles a closure, the closure has more than one result.
-checks <- chk |>
-  group_by(benchmark, fn) |>
-  summarise(check = if (any(check == "differs")) "differs"
-                    else if (any(check == "same")) "same" else "unknown",
-            .groups = "drop")
-n_check <- table(factor(checks$check, c("same", "differs", "unknown")))
+## The environment of a benchmark, from the header of its CSV file.
+env_list <- function(b) {
+  m <- b$meta
+  cat(sprintf("- Machine: `%s`, %s %s, %s logical CPUs%s\n", m$hostname, m$system,
+              m$machine, m$logical_cpus, if (is.null(m$cpu_model)) "" else paste(",", m$cpu_model)),
+      sprintf("- Start: %s UTC\n", sub("T", " ", substr(m$timestamp, 1, 16))),
+      sprintf("- %s\n", m$r_version),
+      sprintf("- crbcc %s, commit `%s`\n", m$crbcc_version, m$crbcc_commit),
+      sprintf("- Raw data: [%s](%s)\n", b$file, b$file), sep = "")
+}
 
-# Packages -----------------------------------------------------------------
+# Install benchmark --------------------------------------------------------
 
 ## One row for each package, with the median of the runs for each metric and
-## compiler, for example elapsed_gnur. A run can write more than one sample of
-## a metric, one for each R process of R CMD INSTALL. Then the value of the
-## run is the sum of its samples. A package without closures has no bytecode
-## value, thus its bytecode time is 0. The longest
-## elapsed_gnur is first.
-pk <- d |>
-  filter(metric %in% c("elapsed", "bytecode"), !is.na(value)) |>
-  group_by(package = benchmark, compiler, metric, run) |>
-  summarise(value = sum(value), .groups = "drop") |>
-  group_by(package, compiler, metric) |>
+## compiler, for example elapsed_gnur. Only the packages with results of the
+## two compilers. The longest elapsed_gnur is first.
+ins_runs <- n_distinct(ins$data$run)
+pk <- passed(ins$data) |>
+  filter(suite == "install") |>
+  group_by(package = benchmark, compiler, metric) |>
   summarise(value = median(value), .groups = "drop") |>
-  pivot_wider(names_from = c(metric, compiler), values_from = value, values_fill = 0) |>
-  ## Only the packages with results of the two compilers. For example, a
-  ## package has no crbcc results if all its crbcc runs fail.
-  filter(elapsed_gnur > 0, elapsed_crbcc > 0) |>
+  pivot_wider(names_from = c(metric, compiler), values_from = value) |>
+  filter(!is.na(elapsed_gnur), !is.na(elapsed_crbcc)) |>
   mutate(group = if_else(package %in% RECOMMENDED, "recommended", "CRAN"), .after = package) |>
   arrange(desc(elapsed_gnur))
-el <- c(gnur = sum(pk$elapsed_gnur), crbcc = sum(pk$elapsed_crbcc))
-bc <- c(gnur = sum(pk$bytecode_gnur), crbcc = sum(pk$bytecode_crbcc))
 
-# Closures -----------------------------------------------------------------
+## The totals of all packages and of each group. less is the part of the
+## GNU R elapsed time that crbcc saves.
+tot <- bind_rows(pk, mutate(pk, group = "all")) |>
+  group_by(group = factor(group, c("CRAN", "recommended", "all"))) |>
+  summarise(packages = n(), across(matches("_(gnur|crbcc)$"), sum)) |>
+  mutate(less = 1 - elapsed_crbcc / elapsed_gnur)
+less <- setNames(tot$less, tot$group)
+n_grp <- setNames(tot$packages, tot$group)
+el <- c(gnur = sum(pk$elapsed_gnur), crbcc = sum(pk$elapsed_crbcc))
+
+# Closures benchmark -------------------------------------------------------
+
+chk <- filter(clo$data, suite == "check")
+n_chk <- sum(chk$value[chk$metric == "closures"])
+chk_failed <- failed_runs(chk)
+## The failure of a check gives the count: "<n> closures differ or do not
+## compile".
+n_bad <- sum(as.integer(regmatches(chk_failed$failure,
+  regexpr("[0-9]+(?= closures differ)", chk_failed$failure, perl = TRUE))))
+cl_runs <- n_distinct(clo$data$run[clo$data$suite == "closures"])
 
 ## One row for each closure: the median compile time of each compiler, the
-## size in AST nodes, and the size class (powers of 10).
-closures <- d |>
-  filter(metric == "time") |>
-  group_by(package = benchmark, fn, compiler) |>
+## size in AST nodes, and the size class (powers of 10). Only the closures
+## with results of the two compilers.
+cl <- passed(clo$data) |>
+  filter(suite == "closures", metric == "compile") |>
+  group_by(package = benchmark, closure, size = as.numeric(size), compiler) |>
   summarise(time = median(value), .groups = "drop") |>
   pivot_wider(names_from = compiler, values_from = time) |>
-  inner_join(chk |> filter(!is.na(size)) |> distinct(package = benchmark, fn, size),
-             by = c("package", "fn")) |>
   filter(!is.na(gnur), !is.na(crbcc)) |>
   mutate(class = cut(size, c(1, 10, 100, 1e3, 1e4, Inf),
                      c("1-9", "10-99", "100-999", "1,000-9,999", ">= 10,000"), right = FALSE))
+
+## One row for each package: the median run time of each compiler. The time
+## of a run is the sum of the compile times of its closures. Only the
+## packages with results of the two compilers.
+cl_pk <- passed(clo$data) |>
+  filter(suite == "closures", metric == "compile") |>
+  group_by(package = benchmark, compiler, run) |>
+  summarise(time = sum(value), .groups = "drop") |>
+  group_by(package, compiler) |>
+  summarise(time = median(time), .groups = "drop") |>
+  pivot_wider(names_from = compiler, values_from = time) |>
+  filter(!is.na(gnur), !is.na(crbcc))
+cmp <- c(gnur = sum(cl_pk$gnur), crbcc = sum(cl_pk$crbcc))
+speedup <- cmp[["gnur"]] / cmp[["crbcc"]]
+largest <- slice_max(cl, size, n = 1, with_ties = FALSE)
+largest_name <- paste0("`", largest$closure, "`")
+
+n_chk_pkg <- n_distinct(chk$benchmark)
+if (nrow(chk_failed) == 0) {
+  correct_tldr <- sprintf("crbcc gives the same byte code as GNU R for all %s closures.", fmt(n_chk, 0))
+  correct <- sprintf("The check compiled %s closures of %d packages. All closures have the same byte code with the two compilers.",
+                     fmt(n_chk, 0), n_chk_pkg)
+} else {
+  failed_counts <- sprintf("failed for %d of %d packages and %s of %s closures",
+                           nrow(chk_failed), n_chk_pkg, fmt(n_bad, 0), fmt(n_chk, 0))
+  correct_tldr <- paste0("the check ", failed_counts, ".")
+  correct <- paste0("The check ", failed_counts, ":")
+}
 
 # Badge for the README -----------------------------------------------------
 
 if (nzchar(params$assets)) {
   dir.create(params$assets, showWarnings = FALSE, recursive = TRUE)
   writeLines(sprintf('{"schemaVersion": 1, "label": "compile speedup", "message": "%s faster than GNU R", "color": "blue"}',
-                     times(bc[["gnur"]] / bc[["crbcc"]])),
+                     times(speedup)),
              file.path(params$assets, "speedup.json"))
 }
 ```
 
-crbcc compiles R code to byte code. It gives the same byte code as the
-compiler package of GNU R, but it is faster.
+# Introduction
+
+crbcc compiles R code to byte code. It gives the same byte code as the GNU R
+`compiler` package, but it is faster.
 
 - [README and source code](https://github.com/PRL-PRG/crbcc#readme)
 - [Use crbcc](https://prl-prg.github.io/crbcc/crbcc.html): compile closures
   and install packages with crbcc
 - [crbcc on CRAN](https://CRAN.R-project.org/package=crbcc)
 
-<!-- end of the list -->
+# Benchmarks
 
-- **Installation:** with crbcc, `R CMD INSTALL` of `r nrow(pk)` packages
-  takes `r fmt(el[["crbcc"]])` s, not `r fmt(el[["gnur"]])` s with GNU R
-  (`r pct(1 - el[["crbcc"]] / el[["gnur"]])` less).
-- **Byte-code compilation:** crbcc compiles the closures of these packages
-  `r times(bc[["gnur"]] / bc[["crbcc"]])` faster than GNU R
-  (`r fmt(bc[["crbcc"]], 2)` s, not `r fmt(bc[["gnur"]])` s).
-- **Correctness:** the byte code of `r fmt(n_check[["same"]], 0)` of
-  `r fmt(n_check[["same"]] + n_check[["differs"]], 0)` closures is the same
-  as the GNU R byte code.
+The two benchmarks ran on different machines, at different times, and
+possibly with different crbcc versions. Do not compare the times of one
+benchmark with the times of the other.
 
-## Methodology
+## TL;DR
 
-Each benchmark installs one package with `R CMD INSTALL`. The hook
-`inst/r-cmd-install-hook.R` (`R_PROFILE_USER`) replaces
-`compiler:::tryCmpfun`, which R uses to compile each closure of the package.
-The replacement compiles the closure with GNU R (`gnur`, `compiler::cmpfun`)
-or with crbcc (`crbcc`, `crbcc::cmpfun`) and measures the compile time.
+- **Install time** ([install benchmark](#install-benchmark), crbcc
+  `r ins$meta$crbcc_version`): with crbcc, `R CMD INSTALL` of `r nrow(pk)`
+  packages takes `r pct(less[["all"]])` less time than with GNU R
+  (`r fmt(el[["crbcc"]])` s, not `r fmt(el[["gnur"]])` s).
+- **Compile time** ([closures benchmark](#closures-benchmark), commit
+  `r short(clo$meta$crbcc_commit)`): crbcc compiles `r fmt(nrow(cl), 0)`
+  closures `r times(speedup)` faster than GNU R.
+- **Correctness** ([closures benchmark](#closures-results)):
+  `r correct_tldr`
+
+## Install benchmark {#install-benchmark}
+
+### Methodology {#install-methodology}
+
+The benchmark installs `r n_distinct(ins$data$benchmark)` packages: the
+`r sum(!unique(ins$data$benchmark) %in% RECOMMENDED)` CRAN packages with the
+most downloads and the `r sum(unique(ins$data$benchmark) %in% RECOMMENDED)`
+recommended packages. Each install is `R CMD INSTALL` of the CRAN source
+tarball. It runs `configure` and compiles the native code with
+`MAKEFLAGS=-j8`. For each package, `r ins_runs` runs with GNU R come first,
+then `r ins_runs` runs with crbcc. The installs run one at a time.
+The benchmark sets `OPENBLAS_NUM_THREADS=1` for each R process, because one
+OpenBLAS thread for each CPU adds CPU time that depends on the machine.
+
+Each install goes into an empty library. Thus all dependencies come from the
+image library, which GNU R compiled.
+
+For crbcc, R reads the hook `inst/r-cmd-install-hook.R`, which replaces the
+byte-code compiler with crbcc. In each R process,
+`inst/benchmarks/timing-profile.R` measures the time in two functions. It
+only reads the clock. Each run gives three numbers:
 
 - **elapsed**: the wall time of `R CMD INSTALL`.
-- **bytecode**: the time in the byte-code compiler, for all closures that R
-  compiles during the installation. These closures include the S4 methods.
-- **compile time of a closure**: the time of one compilation, during the
-  installation.
-- **correctness**: the suite `check` installs each package of the Docker
-  image one time with crbcc. The hook compares the byte code of each closure with the GNU R
-  byte code in the Docker image (`identical()` with all strict flags). A run
-  with a different byte code is a failure. The runs that measure the time do
-  not compare, because the comparison adds time to the installation.
+- **native**: the time in `tools:::.shlib_internal`, which compiles and links
+  the C, C++ and Fortran code.
+- **bytecode**: the time in `compiler:::tryCmpfun`, which compiles each
+  closure to byte code.
 
-In the benchmark Docker image, the package tarballs have the compiled
-native code of a previous installation. `R CMD INSTALL
---no-configure` does not compile this code again. Thus the elapsed time is
-the time of the R part of the installation. The size of a closure is the
-number of AST nodes of its body and of the default values of its formals
-(`crbcc:::function_size`), from the suite `check`. The speedup of a group
-of closures is the geometric mean of the speedups of the closures.
+The value of a package is the median of its runs. A total is the sum of the
+package values. The rest is elapsed - native - bytecode. In this time, R
+parses the code, makes the lazy-load database and the help pages, and loads
+the package to test it. The statistics do not use failed runs.
 
-- Packages: `r nrow(pk)` (`r sum(pk$group == "recommended")` recommended,
-  `r sum(pk$group == "CRAN")` CRAN).
-- `gnur`: `r runs[["gnur"]]` runs of each package, from `r src[["gnur"]]`.
-- `crbcc`: `r runs[["crbcc"]]` runs of each package, from `r src[["crbcc"]]`.
+The image build ran this benchmark with the crbcc of the image. Thus the
+results are for that crbcc, not for the commit of the closures benchmark.
 
-The section [Environment](#environment) gives the machine of each file. The
-tables and figures show the median of the runs.
-
-## Results
-
-### Correctness
-
-Of `r fmt(sum(n_check), 0)` closures, `r fmt(n_check[["same"]], 0)` have the
-same byte code as GNU R, and `r fmt(n_check[["differs"]], 0)` have a
-different byte code. For `r fmt(n_check[["unknown"]], 0)` closures, the
-baseline has no byte code, for example for a closure that the JIT compiles in
-a different R process.
-
-```{r differs, eval = n_check[["differs"]] > 0}
-checks |> filter(check == "differs") |> count(package = benchmark, name = "closures") |>
-  knitr::kable(caption = "Closures with a different byte code")
+```{r install-env, results = "asis"}
+env_list(ins)
 ```
 
-```{r failed, eval = nrow(failed) > 0}
-knitr::kable(failed, caption = "Runs with a failure. The results do not include these runs.")
+### Results {#install-results}
+
+```{r install-failed}
+failed_table(filter(ins$data, suite == "install"))
 ```
 
-### Installation time
+With crbcc, the elapsed time is `r pct(less[["all"]])` less for all
+`r n_grp[["all"]]` packages: `r pct(less[["CRAN"]])` less for the
+`r n_grp[["CRAN"]]` CRAN packages and `r pct(less[["recommended"]])` less for
+the `r n_grp[["recommended"]]` recommended packages.
 
-```{r install-summary}
-tibble(compiler = COMPILERS,
-       `elapsed (s)` = fmt(el, 1),
-       `bytecode (s)` = fmt(bc, 2),
-       `bytecode share` = pct(bc / el))
+```{r install-totals}
+tot |>
+  select(-less) |>
+  pivot_longer(-c(group, packages), names_to = c(".value", "compiler"), names_sep = "_") |>
+  arrange(group, factor(compiler, COMPILERS)) |>
+  transmute(packages = sprintf("%s (%d)", group, packages), compiler,
+            `elapsed (s)` = fmt(elapsed), `native (s)` = fmt(native),
+            `bytecode (s)` = fmt(bytecode), `rest (s)` = fmt(elapsed - native - bytecode))
 ```
 
-The bytecode share is the part of the installation time in the byte-code
-compiler. In the other time, R parses the code, makes the lazy-load database
-and the help pages, and loads the package to test it.
-
-The plot shows the installation time of each package with each compiler. The
-left panel is the elapsed time of `R CMD INSTALL`, and the right panel is the
-time in the byte-code compiler. A line connects the two compilers of a
-package, thus a long line shows a large difference. The package with the
-longest GNU R installation time is first. The X axes have a log scale.
+The package with the longest GNU R elapsed time is first.
 
 ```{r install-time-plot, fig.height = 1.5 + 0.25 * nrow(pk)}
-## A dot plot of the packages in p, in the order of p. The X axis is also at
-## the top, because the plot of all packages is tall.
-install_plot <- function(p) {
+## A dot plot of the packages in p, in the order of p. If top is TRUE, the X
+## axis is also at the top, because the plot of all packages is tall.
+install_plot <- function(p, top = TRUE) {
   p |>
-    pivot_longer(-c(package, group), names_to = c("metric", "compiler"), names_sep = "_") |>
+    select(package, matches("^(elapsed|bytecode)_")) |>
+    pivot_longer(-package, names_to = c("metric", "compiler"), names_sep = "_") |>
     mutate(package = factor(package, rev(p$package)),
            metric = factor(metric, c("elapsed", "bytecode"),
                            c("elapsed time of R CMD INSTALL (s)", "byte-code compile time (s)"))) |>
     ggplot(aes(value, package)) +
     geom_line(aes(group = package), colour = RANGE, linewidth = 0.9) +
     geom_point(aes(fill = compiler), shape = 21, colour = "white", size = 3.2, stroke = 0.8) +
-    compiler_fill + log_x(sec.axis = dup_axis()) + labs(x = "s (log scale)", y = NULL) +
+    compiler_fill + log_x(sec.axis = if (top) dup_axis() else waiver()) +
+    labs(x = "s (log scale)", y = NULL) +
     facet_wrap(~ metric, scales = "free_x")
 }
 ## The README shows the first 15 packages.
 if (nzchar(params$assets))
-  ggsave(file.path(params$assets, "install-time-top15.png"), install_plot(head(pk, 15)),
+  ggsave(file.path(params$assets, "install-time-top15.png"), install_plot(head(pk, 15), top = FALSE),
          width = 9, height = 1.5 + 0.25 * 15, dpi = 120, bg = "white")
 install_plot(pk)
 ```
 
-The table has one row for each package. The largest byte-code speedup is
-first.
+The table gives the package values in the order of the plot. The column
+less is the part of the GNU R elapsed time that crbcc saves.
 
-- **gnur (s)**, **crbcc (s)**: the elapsed time of `R CMD INSTALL` with each
-  compiler.
-- **gnur / crbcc**: the installation speedup.
-- **bytecode gnur (s)**, **bytecode crbcc (s)**: the time in the byte-code
-  compiler.
-- **bytecode gnur / crbcc**: the byte-code compilation speedup. If R
-  compiles no closure of a package, the two bytecode times are 0. Then the
-  speedup is not a number (`NaNx`), and the package is last.
-- **bytecode share gnur**: bytecode gnur (s) divided by gnur (s), the part
-  of the GNU R installation time in the byte-code compiler. This is
-  approximately the maximum part of the installation time that crbcc can
-  save.
-
-```{r install-time-table}
+```{r install-table}
 pk |>
-  arrange(desc(bytecode_gnur / bytecode_crbcc)) |>
   transmute(package, group,
-            `gnur (s)` = fmt(elapsed_gnur, 2),
-            `crbcc (s)` = fmt(elapsed_crbcc, 2),
-            `gnur / crbcc` = times(elapsed_gnur / elapsed_crbcc, 2),
+            `elapsed gnur (s)` = fmt(elapsed_gnur, 2),
+            `elapsed crbcc (s)` = fmt(elapsed_crbcc, 2),
+            less = pct(1 - elapsed_crbcc / elapsed_gnur),
+            `native gnur (s)` = fmt(native_gnur, 2),
+            `native crbcc (s)` = fmt(native_crbcc, 2),
             `bytecode gnur (s)` = fmt(bytecode_gnur, 2),
-            `bytecode crbcc (s)` = fmt(bytecode_crbcc, 3),
-            `bytecode gnur / crbcc` = times(bytecode_gnur / bytecode_crbcc),
-            `bytecode share gnur` = pct(bytecode_gnur / elapsed_gnur))
+            `bytecode crbcc (s)` = fmt(bytecode_crbcc, 3))
 ```
 
-### Function size
+## Closures benchmark {#closures-benchmark}
 
-The compile time of each closure, by the size of the closure. There are
-`r fmt(nrow(closures), 0)` closures. The median size is
-`r fmt(median(closures$size), 0)` nodes, and the largest closure (in
-`r closures$package[which.max(closures$size)]`) has
-`r fmt(max(closures$size), 0)` nodes.
+### Methodology {#closures-methodology}
 
-```{r fn-table}
-closures |>
+The closures of a package are its namespace functions, its S4 methods and its
+R6 methods (`crbcc:::package_closures`). The benchmark uses
+`r n_distinct(clo$data$benchmark)` packages: the base packages without
+`datasets` and `tcltk`, and the recommended packages. The counts are
+closures, not compile events. Thus they do not compare with older reports.
+
+First, the check compiles each closure one time with each compiler, and
+compares the byte code (`crbcc:::identical_strict`). A closure fails the
+check if the byte code differs or a compiler stops with an error. Then each
+compiler compiles each closure in `r cl_runs` runs, and the benchmark
+measures the time of each `cmpfun()` call. Before these calls, each run
+compiles its first closure one time without a measurement, because the first
+compile loads code of the compiler. As in `R CMD INSTALL`, the R JIT is off.
+A run is one R process for one package and one compiler. The benchmark sets
+`OPENBLAS_NUM_THREADS=1` for each R process, because one OpenBLAS thread for
+each CPU adds CPU time that depends on the machine. For each package, the
+GNU R runs come first, then the crbcc runs. Each run compiles the closures in a
+different random order.
+
+The time of a run is the sum of the compile times of its closures. The value
+of a package is the median of its run times. A total is the sum of the package
+values. The value of a closure is the median of its runs. A total includes the
+garbage collections and the lazy loads of a run. The closure values do not
+include them, because the random order moves them to a different closure in
+each run.
+
+The speedup of a closure is its GNU R time divided by its crbcc time. For a
+group of closures, the speedup is the geometric mean of the closure speedups.
+For a package or a group of packages, it is also the ratio of the totals. The
+size of a closure is the number of AST nodes in its body and in the default
+values of its formals (`crbcc:::function_size`). The statistics do not use
+failed runs.
+
+The benchmark ran in the benchmark image, with the crbcc of the commit below.
+
+```{r closures-env, results = "asis"}
+env_list(clo)
+```
+
+### Results {#closures-results}
+
+`r correct`
+
+```{r check-failed, eval = nrow(chk_failed) > 0}
+chk_failed |>
+  transmute(package = benchmark, failure = gsub("\\s+", " ", failure))
+```
+
+```{r closures-failed}
+failed_table(filter(clo$data, suite == "closures"))
+```
+
+GNU R compiles the `r fmt(nrow(cl), 0)` closures in `r fmt(cmp[["gnur"]], 2)`
+s, and crbcc in `r fmt(cmp[["crbcc"]], 2)` s. The speedup is
+`r times(speedup)` as the ratio of the totals and
+`r times(gmean(cl$gnur / cl$crbcc))` as the geometric mean.
+
+The median closure size is `r fmt(median(cl$size), 0)` AST nodes. The
+largest closure is `r largest_name` in `r largest$package`, with
+`r fmt(largest$size, 0)` nodes.
+
+```{r size-table}
+cl |>
   group_by(`size (AST nodes)` = class) |>
   summarise(closures = fmt(n(), 0),
-            `gnur (us)` = fmt(median(gnur) * 1e6),
-            `crbcc (us)` = fmt(median(crbcc) * 1e6),
-            `gnur / crbcc` = times(gmean(gnur / crbcc)))
+            `gnur median (us)` = fmt(median(gnur) * 1e6),
+            `crbcc median (us)` = fmt(median(crbcc) * 1e6),
+            `gnur / crbcc geo. mean` = times(gmean(gnur / crbcc)))
 ```
 
-The plot shows the compile time of each closure with each compiler, by the
-size of the closure. Each point is one closure. Each line connects the
-medians of the size classes of one compiler. The two axes have a log scale.
-
-```{r fn-time-plot, fig.height = 6}
-long <- closures |>
+```{r size-time-plot, fig.height = 6}
+long <- cl |>
   pivot_longer(all_of(COMPILERS), names_to = "compiler", values_to = "time") |>
   mutate(compiler = factor(compiler, COMPILERS))
 mid <- long |>
@@ -321,14 +405,8 @@ ggplot(long, aes(size, time * 1e6, colour = compiler)) +
        subtitle = "The points are closures. The line is the median of the size class.")
 ```
 
-The plot shows the speedup of crbcc for each closure, by the size of the
-closure. The speedup is the GNU R compile time divided by the crbcc compile
-time, thus a value above 1 shows that crbcc is faster. Each point is one
-closure. The line connects the geometric means of the size classes. The two
-axes have a log scale.
-
-```{r fn-speedup-plot, fig.height = 4.5}
-x <- closures |> mutate(speedup = gnur / crbcc) |> filter(is.finite(speedup), speedup > 0)
+```{r size-speedup-plot, fig.height = 4.5}
+x <- cl |> mutate(speedup = gnur / crbcc) |> filter(is.finite(speedup), speedup > 0)
 mid <- x |>
   group_by(class) |>
   summarise(size = median(size), speedup = gmean(speedup), .groups = "drop")
@@ -341,63 +419,17 @@ ggplot(x, aes(size, speedup)) +
        subtitle = "The points are closures. The line is the geometric mean of the size class.")
 ```
 
-#### By package
+The table gives the totals of each package. The package with the longest
+GNU R total is first.
 
-The column "gnur / crbcc total" is the sum of the closure times with `gnur`,
-divided by the sum with `crbcc`.
-
-```{r fn-package}
-closures |>
+```{r closures-package}
+cl |>
   group_by(package) |>
-  summarise(closures = fmt(n(), 0), `median size` = fmt(median(size), 0),
-            largest = fmt(max(size), 0),
-            `gnur / crbcc total` = times(sum(gnur) / sum(crbcc)),
-            `gnur / crbcc geo. mean` = times(gmean(gnur / crbcc))) |>
-  arrange(match(package, pk$package))
-```
-
-#### Slowest closures
-
-The 10 closures with the longest `crbcc` compile time:
-
-```{r fn-slowest}
-closures |> slice_max(crbcc, n = 10, with_ties = FALSE) |>
-  transmute(package, size = fmt(size, 0),
-            `gnur (us)` = fmt(gnur * 1e6), `crbcc (us)` = fmt(crbcc * 1e6),
-            `gnur / crbcc` = times(gnur / crbcc))
-```
-
-## Reproduce
-
-### Input
-
-The report reads the `--csv` reports of `inst/benchmarks/crbcc_bench.py`
-(`params$csv`). The files must have the suite `install` with `gnur` and
-`crbcc`, and the suite `check`. The docstring of `crbcc_bench.py` gives the
-columns and the metrics. The `gnur` and `crbcc` results must come from the
-same machine, because the report divides their times.
-
-To make this report again in the Docker image, run these commands in a work
-directory that has the crbcc source in `crbcc/`:
-
-    mkdir -p pkg-lib
-    R CMD INSTALL --library=pkg-lib crbcc
-    crbcc/inst/benchmarks/crbcc_bench.py --r "$(which R)" \
-      --prebuilt /opt/crbcc-benchmarks \
-      --packages top50 --packages recommended --csv results.csv
-    Rscript -e 'rmarkdown::render("crbcc/inst/benchmarks/crbcc_bench.Rmd",
-      output_dir = ".", knit_root_dir = getwd(),
-      params = list(csv = "results.csv"))'
-
-With `--prebuilt`, `crbcc_bench.py` runs the suites `check` and `install`.
-For the options, use `--help`.
-
-### Environment
-
-```{r env}
-bind_rows(lapply(names(lines), function(f) {
-  meta <- sub("^# ", "", grep("^#", lines[[f]], value = TRUE))
-  tibble(key = sub(": .*", "", meta), value = sub("^[^:]*: ", "", meta), file = f)
-})) |>
-  pivot_wider(names_from = file, values_from = value, values_fill = "")
+  summarise(closures = n(), `median size` = median(size), largest = max(size),
+            geo = gmean(gnur / crbcc)) |>
+  inner_join(cl_pk, by = "package") |>
+  arrange(desc(gnur)) |>
+  transmute(package, closures = fmt(closures, 0), `median size` = fmt(`median size`, 0),
+            largest = fmt(largest, 0), `gnur (ms)` = fmt(gnur * 1e3), `crbcc (ms)` = fmt(crbcc * 1e3),
+            `gnur / crbcc total` = times(gnur / crbcc), `gnur / crbcc geo. mean` = times(geo))
 ```

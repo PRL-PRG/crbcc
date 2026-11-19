@@ -16,13 +16,14 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 ## Features
 
 - The output is the same as the output of the GNU-R compiler.
-- It compiles the closures approximately 48x faster than the GNU-R compiler.
+- It compiles the closures approximately 50x faster than the GNU-R compiler.
 - Package installation is often dominated by the native code compilation (C/C++/Fortran)
   but even with that crbcc can save approximately 25% of the time.
 
-[![Installation time of the 15 packages with the longest GNU R installation time](https://prl-prg.github.io/crbcc/install-time-top15.png)](https://prl-prg.github.io/crbcc/#installation-time)
+[![Installation time of the 15 packages with the longest GNU R installation time](https://prl-prg.github.io/crbcc/install-time-top15.png)](https://prl-prg.github.io/crbcc/#install-results)
 The figure shows the installation time of the 15 packages with the
-longest GNU R installation time. The left panel is the elapsed time of
+longest GNU R installation time. `R CMD INSTALL` builds each package from the
+CRAN source, also its native code. The left panel is the elapsed time of
 `R CMD INSTALL`, and the right panel is the time in the byte-code compiler.
 
 For more details check the [benchmark report](https://prl-prg.github.io/crbcc/).
@@ -138,11 +139,11 @@ The tests in `tests/` compare crbcc with the GNU-R compiler:
 `R CMD check` and `make test` run these tests. The CI runs `R CMD check` on
 Linux and macOS.
 
-The integration test installs all 158 packages of the benchmark Docker
-image with crbcc, and compares the byte code of each closure with the
-GNU R byte code (see [Benchmarks](#benchmarks)). These closures include the
-S4 methods and the closures that the R JIT compiles during the
-installation. The CI job `check` runs this test. To run it in the image:
+The integration test compiles each closure of each package in the benchmark
+Docker image with the two compilers, and compares the byte code (see
+[Benchmarks](#benchmarks)). These closures include the S4 methods and the R6
+methods. The image build runs this test, and the CI job `closures` runs it
+for the base and recommended packages. To run it in the image:
 
 ```bash
 docker run --rm -v "$PWD":/crbcc -w /crbcc \
@@ -153,10 +154,12 @@ docker run --rm -v "$PWD":/crbcc -w /crbcc \
 ## Benchmarks
 
 The benchmarks check the correctness of crbcc and compare its performance
-with the GNU-R compiler. Each benchmark installs one package with
-`R CMD INSTALL`, and measures the compile time of each closure. The
-benchmarks run in a Docker image that has the packages with their compiled
-native code, thus the benchmarks do not compile C, C++ and Fortran code.
+with the GNU-R compiler. The install benchmark measures `R CMD INSTALL` of
+the 50 CRAN packages with the most downloads and the 15 recommended packages,
+from the source. It runs when the benchmark Docker image is built, one time
+for each crbcc version. The closures benchmark measures the compile time of
+each closure of the base and recommended packages. The CI runs it for each
+pull request and each push to `main`.
 
 - [Benchmark report](https://prl-prg.github.io/crbcc/): the results of the
   last push to `main`. The source is `inst/benchmarks/crbcc_bench.Rmd`.
@@ -170,5 +173,4 @@ native code, thus the benchmarks do not compile C, C++ and Fortran code.
 
 - The compiler notes are in English only. GNU R translates them to the
   language of the R session.
-- `cmpfile()` currently does not support a functional `verbose` mode (the argument exists but is not implemented).
 - Saving and loading functionality is not compatible with the GNU-R compiler, since it uses an .Internal call to manage the files.

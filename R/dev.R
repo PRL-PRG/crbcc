@@ -4,18 +4,47 @@
 # R CMD check does not accept `.Internal()`, thus this file uses
 # `compiler::disassemble()`.
 
-#' Returns the closures of the namespace of a package
+#' Returns the closures that a package defines
 #'
-#' Each closure has its R code as the body, not the byte code of the
-#' installed package.
+#' The closures come from three sources: the functions of the namespace, the
+#' S4 methods of its method tables, and the methods of its R6 class
+#' generators. Each closure has its R code as the body, not the byte code of
+#' the installed package.
+#'
+#' The name of a function is its name in the namespace. The name of an S4
+#' method is "<generic>:<package of the generic>,<signature>", for example
+#' "show:methods,dgCMatrix". The name of an R6 method is
+#' "<generator>$<list>$<method>", for example "process$public_methods$kill".
 #'
 #' @param package The name of the package.
 #' @return A named list of closures.
 #' @noRd
 package_closures <- function(package) {
   ns <- asNamespace(package)
-  funs <- mget(ls(ns, all.names = TRUE), envir = ns)
-  funs <- Filter(function(f) typeof(f) == "closure", funs)
+  # The value of .Last.value in base changes after each top-level call.
+  objs <- mget(setdiff(ls(ns, all.names = TRUE), ".Last.value"), envir = ns)
+  funs <- Filter(function(f) typeof(f) == "closure", objs)
+  # A method is a method of this package only if topenv() of its environment
+  # is the namespace. For example, a derived default S4 method can wrap a
+  # function of a different package.
+  methods <- list()
+  add <- function(name, m) {
+    if (typeof(m) == "closure" && identical(topenv(environment(m)), ns))
+      methods <<- c(methods, structure(list(m), names = name))
+  }
+  # A method table .__T__<generic>:<package> has one method for each
+  # signature.
+  for (t in grep("^\\.__T__", names(objs), value = TRUE))
+    for (sig in ls(objs[[t]], all.names = TRUE))
+      add(paste0(substring(t, 7), ",", sig), get(sig, envir = objs[[t]], inherits = FALSE))
+  # An R6 class generator is an environment with three lists of methods.
+  for (g in names(Filter(function(o) inherits(o, "R6ClassGenerator"), objs)))
+    for (part in c("public_methods", "private_methods", "active"))
+      for (m in names(objs[[g]][[part]]))
+        add(paste(g, part, m, sep = "$"), objs[[g]][[part]][[m]])
+  funs <- c(funs, methods)
+  if (anyDuplicated(names(funs)))
+    stop("a closure name is not unique: ", names(funs)[anyDuplicated(names(funs))])
   lapply(funs, function(f) {
     body(f) <- body(f)
     f

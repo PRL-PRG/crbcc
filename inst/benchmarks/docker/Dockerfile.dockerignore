@@ -1,0 +1,12 @@
+# The files of the build context that the image must not have. A change to
+# them must not start the install benchmark again. BuildKit reads this file,
+# because its name is the Dockerfile name with .dockerignore.
+.git
+.cache
+.vscode
+bench
+*.Rcheck
+*.tar.gz
+src/*.o
+src/*.so
+compile_flags.txt

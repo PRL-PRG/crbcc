@@ -33,10 +33,6 @@ package.
 
 When the hook is enabled, R does not read the usual \code{.Rprofile} file
 in the R processes that this R session starts.
-
-The environment variable \code{CRBCC_MODE} sets a benchmark mode of the
-hook. The benchmarks of crbcc use these modes. For the modes, refer to the
-comments in the hook.
 }
 \value{
 \code{r_cmd_install_hook_path} returns a path.
