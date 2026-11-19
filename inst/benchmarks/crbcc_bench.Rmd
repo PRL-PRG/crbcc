@@ -317,7 +317,9 @@ measures the time of each `cmpfun()` call. Before these calls, each run
 compiles its first closure one time without a measurement, because the first
 compile loads code of the compiler. As in `R CMD INSTALL`, the R JIT is off.
 A run is one R process for one package. For each package, the GNU R runs
-come first, then the crbcc runs.
+come first, then the crbcc runs. Each run compiles the closures in a
+different random order. Thus a garbage collection or a lazy load occurs in a
+different closure in each run, and the median removes its time.
 
 The value of a closure is the median of its runs. A total is the sum of the
 closure values. The speedup of a closure is its GNU R time divided by its

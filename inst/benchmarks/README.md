@@ -56,7 +56,10 @@ defines.
   differs or a compiler stops with an error, the run fails. If a package has
   no closures, the run also fails.
 - The suite `closures` compiles each closure in 3 runs with each compiler. It
-  records the compile time and the size of each closure.
+  records the compile time and the size of each closure. Each run compiles
+  the closures in a different random order. Thus a garbage collection or a
+  lazy load occurs in a different closure in each run, and the median of the
+  runs removes its time.
 
 The two suites use the base packages without `datasets` and `tcltk`, and the
 recommended packages. With `--installed`, they also use all other installed

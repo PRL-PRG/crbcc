@@ -11,6 +11,7 @@
 ##   gnur, crbcc  Compiles each closure with one compiler. For each closure,
 ##                writes "RBC closure<TAB><s><TAB><size><TAB><name>". <s> is
 ##                the compile time and <size> is `crbcc:::function_size`.
+##                Each run compiles the closures in a different random order.
 ##
 ## If the package has no closures, the script stops with an error.
 
@@ -46,7 +47,10 @@ if (mode == "check") {
   ## The first compile loads code of the compiler. Thus do it before the
   ## measurements.
   invisible(cmpfun(funs[[1]], opts))
-  for (name in names(funs)) {
+  ## A new R process makes its random seed from the time and the process ID.
+  ## Thus a GC or the first use of a lazy-load promise occurs in a different
+  ## closure in each run, and the median of the runs removes its time.
+  for (name in sample(names(funs))) {
     f <- funs[[name]]
     ## .Internal(Sys.time()) is the R clock with the smallest overhead.
     t0 <- .Internal(Sys.time())

@@ -21,7 +21,8 @@ Suites:
             time, and compares the byte code (closures.R). A run is a failure
             if a byte code is different or a compiler stops with an error.
   closures  Compiles each closure of each package --runs times with each
-            compiler, and measures the compile time of each closure.
+            compiler, and measures the compile time of each closure. Each run
+            compiles the closures in a different random order.
 
 The suite install uses the 50 CRAN packages in docker/cran50.txt and the 15
 recommended packages. The suites check and closures use the base packages in
