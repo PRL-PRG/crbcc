@@ -70,6 +70,16 @@ static unsigned int cp_hash_rec(SEXP x, int *budget) {
     case CHARSXP:
       return cp_hash_combine(h, cp_hash_char(x));
 
+    // identical() compares the constant pools of two code objects. The first
+    // constant is the expression. Without the expression, all promise code
+    // objects of a pool have the same hash, and the probe calls identical()
+    // for each of them. The first nodes of the expression are sufficient.
+    // More nodes make the hash slower than the calls of identical().
+    case BCODESXP: {
+      int expr_budget = 4;
+      return cp_hash_combine(h, cp_hash_rec(R_BytecodeExpr(x), &expr_budget));
+    }
+
     case LGLSXP:
     case INTSXP:
       n = XLENGTH(x);

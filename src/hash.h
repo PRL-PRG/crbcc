@@ -18,8 +18,10 @@
  *    ASCII strings have the same bytes.
  *  - Symbols and environments: two objects are identical only if they are
  *    the same object. The hash uses the pointer.
- *  - Closures, builtins, byte code, promises and other types: the hash uses
- *    only the type.
+ *  - Byte code: identical byte code has identical constant pools. The hash
+ *    reads the first nodes of the first constant, the expression.
+ *  - Closures, builtins, promises and other types: the hash uses only the
+ *    type.
  *
  * The hash reads at most CP_HASH_NODES objects and CP_HASH_ELTS elements of
  * a vector (hash.c). Identical objects have the same structure, thus the hash
