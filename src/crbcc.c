@@ -1761,11 +1761,12 @@ const char *get_assigned_var(SEXP var, CompilerContext *cntxt) {
     return NULL;
   }
 
-  // Handle strings and symbols
+  // Handle strings and symbols. GNU R makes the name with as.name() or
+  // assign(), which translate the string to the native encoding.
   if (TYPEOF(v) == SYMSXP)
     return CHAR(PRINTNAME(v));
   else if (TYPEOF(v) == STRSXP && Rf_length(v) > 0)
-    return CHAR(STRING_ELT(v, 0));
+    return Rf_translateChar(STRING_ELT(v, 0));
   else if (TYPEOF(v) == CHARSXP)
     return CHAR(v);
   else {
@@ -4325,7 +4326,7 @@ bool dollar_setter_inline_handler(SEXP afun, SEXP place, SEXP orig, SEXP call, C
   SEXP sym = CADDR(place);
 
   if (TYPEOF(sym) == STRSXP && Rf_length(sym) > 0) {
-    sym = Rf_install(CHAR(STRING_ELT(sym, 0)));
+    sym = Rf_installTrChar(STRING_ELT(sym, 0));
   }
 
   if (Rf_isSymbol(sym)) {
@@ -4349,7 +4350,7 @@ bool dollar_getter_inline_handler(SEXP call, CodeBuffer *cb, CompilerContext *cn
   SEXP sym = CADDR(call);
 
   if (TYPEOF(sym) == STRSXP && Rf_length(sym) > 0) {
-    sym = Rf_install(CHAR(STRING_ELT(sym, 0)));
+    sym = Rf_installTrChar(STRING_ELT(sym, 0));
   }
 
   if (Rf_isSymbol(sym)) {
@@ -4797,7 +4798,7 @@ bool inline_dollar(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   if (TYPEOF(arg3) == STRSXP && Rf_length(arg3) == 1) {
     const char *str = CHAR(STRING_ELT(arg3, 0));
     if (str[0] != '\0') {
-      sym = Rf_install(str);
+      sym = Rf_installTrChar(STRING_ELT(arg3, 0));
     }
   }
 
