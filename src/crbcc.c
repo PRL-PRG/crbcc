@@ -980,10 +980,16 @@ static bool fold_gives_no_warning(const char *name, SEXP args, int n_args) {
   }
 
   if (n_args == 1) {
-    if (strcmp(name, "-") == 0 || strcmp(name, "+") == 0 || strcmp(name, "exp") == 0)
+    if (strcmp(name, "-") == 0 || strcmp(name, "+") == 0)
       return true;
-    // These functions give a warning only for a negative number.
-    if (!complex && is_in_c_set(name, log_funs)) {
+    // These functions give a warning if the result is NaN and the argument
+    // is not. The complex exp() can do that, the double exp() cannot. The
+    // other functions do it only for a negative number.
+    if (complex)
+      return false;
+    if (strcmp(name, "exp") == 0)
+      return true;
+    if (is_in_c_set(name, log_funs)) {
       double x = Rf_asReal(VECTOR_ELT(args, 0));
       return ISNAN(x) || x >= 0;
     }
@@ -992,9 +998,13 @@ static bool fold_gives_no_warning(const char *name, SEXP args, int n_args) {
 
   if (n_args == 2) {
     // `:` converts a complex number with a warning. In the arithmetic, a
-    // double or a complex number prevents an integer overflow.
+    // double or a complex number prevents an integer overflow. R_pow() gives
+    // a warning for (-Inf)^y with a large y, thus `^` needs finite numbers.
     if (strcmp(name, ":") == 0)
       return !complex;
+    if (strcmp(name, "^") == 0)
+      return !complex && R_FINITE(Rf_asReal(VECTOR_ELT(args, 0))) &&
+             R_FINITE(Rf_asReal(VECTOR_ELT(args, 1)));
     return !integer_only && is_in_c_set(name, arith);
   }
 
