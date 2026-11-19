@@ -1835,8 +1835,10 @@ static void add_local(NamesList *vars, const char *name) {
 
 // Works as findLocals1 of GNU R. The search of a call to a function in
 // shadowed includes its arguments. Otherwise, the search does not include
-// the arguments of quote(), expression() and local().
-static void find_locals1(SEXP e, NamesList shadowed, CompilerContext *cntxt, NamesList *vars) {
+// the arguments of quote(), expression() and local(). If the result depends
+// on shadowed, sets *uses_shadowed to true.
+static void find_locals1(SEXP e, NamesList shadowed, CompilerContext *cntxt, NamesList *vars,
+                         bool *uses_shadowed) {
 
   if (TYPEOF(e) != LANGSXP) return;
 
@@ -1849,7 +1851,7 @@ static void find_locals1(SEXP e, NamesList shadowed, CompilerContext *cntxt, Nam
 
   if (v == NULL) {
     SEQ_ALONG(a, e)
-    find_locals1(CAR(a), shadowed, cntxt, vars);
+    find_locals1(CAR(a), shadowed, cntxt, vars, uses_shadowed);
     return;
   }
 
@@ -1869,13 +1871,15 @@ static void find_locals1(SEXP e, NamesList shadowed, CompilerContext *cntxt, Nam
   } else if (strcmp(v, "function") == 0 || strcmp(v, "~") == 0) {
     return;
   } else if (strcmp(v, "local") == 0) {
+    *uses_shadowed = true;
     if (!names_contain(shadowed, v) && Rf_length(e) == 2) return;
   } else if (strcmp(v, "quote") == 0 || strcmp(v, "expression") == 0) {
+    *uses_shadowed = true;
     if (!names_contain(shadowed, v)) return;
   }
 
   SEQ_ALONG(a, args)
-  find_locals1(CAR(a), shadowed, cntxt, vars);
+  find_locals1(CAR(a), shadowed, cntxt, vars, uses_shadowed);
 }
 
 // Works as findLocalsList of GNU R. Returns the variables that the elements
@@ -1893,14 +1897,15 @@ NamesList find_locals_list(SEXP elist, SEXP e, CompilerContext *cntxt) {
 
   while (true) {
     NamesList vals = { NULL, 0 };
+    bool uses_sf = false;
     if (TYPEOF(elist) == EXPRSXP) {
       for (R_xlen_t i = 0; i < XLENGTH(elist); i++)
-        find_locals1(VECTOR_ELT(elist, i), sf, cntxt, &vals);
+        find_locals1(VECTOR_ELT(elist, i), sf, cntxt, &vals, &uses_sf);
     } else {
       SEQ_ALONG(a, elist)
-      find_locals1(CAR(a), sf, cntxt, &vals);
+      find_locals1(CAR(a), sf, cntxt, &vals, &uses_sf);
     }
-    find_locals1(e, sf, cntxt, &vals);
+    find_locals1(e, sf, cntxt, &vals, &uses_sf);
 
     // sf <- unique(c(shadowed, sf[sf %in% vals]))
     NamesList next = { (const char **) R_alloc(3, sizeof(const char *)), 0 };
@@ -1910,7 +1915,8 @@ NamesList find_locals_list(SEXP elist, SEXP e, CompilerContext *cntxt) {
       if (names_contain(vals, sf.vars[i]) && !names_contain(next, sf.vars[i]))
         next.vars[next.count++] = sf.vars[i];
 
-    if (next.count == sf.count) {
+    // If vals does not depend on sf, the next iterations give the same vals.
+    if (next.count == sf.count || !uses_sf) {
       const char *special_syntax_funs[] = { "~", "<-", "=", "for", "function", NULL };
       NamesList rdsf = { (const char **) R_alloc(vals.count + 1, sizeof(const char *)), 0 };
       for (int i = 0; i < vals.count; i++)
