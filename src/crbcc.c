@@ -1510,9 +1510,10 @@ SEXP find_fun_def(SEXP fun_sym, CompilerContext *cntxt) {
   return R_NilValue; // Not found
 }
 
-static SEXP eval_match_call(SEXP def, SEXP call, bool expand_dots, bool *had_error) {
-  if (had_error) *had_error = false;
-
+// Do not use R_tryEval() here. It starts a new top level context, and the
+// calling handlers do not get its warnings, for example for a partial
+// argument match. GNU R does not catch an error of this match.call().
+static SEXP eval_match_call(SEXP def, SEXP call, bool expand_dots) {
   SEXP quoted_call = PROTECT(Rf_lang2(Rf_install("quote"), call));
   SEXP match_call_expr;
 
@@ -1522,14 +1523,7 @@ static SEXP eval_match_call(SEXP def, SEXP call, bool expand_dots, bool *had_err
     match_call_expr = PROTECT(Rf_lang4(Rf_install("match.call"), def, quoted_call, R_FalseValue));
   }
 
-  int err_occurred = 0;
-  SEXP matched_call = R_tryEval(match_call_expr, R_BaseEnv, &err_occurred);
-
-  if (err_occurred) {
-    if (had_error) *had_error = true;
-    UNPROTECT(2);
-    return R_NilValue;
-  }
+  SEXP matched_call = Rf_eval(match_call_expr, R_BaseEnv);
 
   UNPROTECT(2);
   return matched_call;
@@ -4842,13 +4836,7 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def) {
 
     SEXP icall = CADR(b);
 
-    bool match_err = false;
-    SEXP matched_call_raw = eval_match_call(def, e, false, &match_err);
-    if (matched_call_raw == R_NilValue && match_err) {
-      return R_NilValue;
-    }
-
-    SEXP matched_call = PROTECT(matched_call_raw);
+    SEXP matched_call = PROTECT(eval_match_call(def, e, false));
 
     // Each CONS() can start the GC. Keep the list protected until the end.
     SEXP args_head = R_NilValue;
