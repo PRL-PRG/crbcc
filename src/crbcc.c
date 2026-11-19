@@ -658,13 +658,15 @@ static void cntxt_stop(const char *msg, CompilerContext *cntxt, Loc loc) {
 
   SEXP msg_sexp = PROTECT(Rf_mkString(full));
   SEXP call_obj = (cntxt && cntxt->call != R_NilValue) ? cntxt->call : R_NilValue;
-  SEXP se_call = PROTECT(Rf_lang3(simple_error_sym, msg_sexp, call_obj));
+  // Quote the call. Rf_eval() must not evaluate the code of the user.
+  SEXP quoted_call = PROTECT(Rf_lang2(Rf_install("quote"), call_obj));
+  SEXP se_call = PROTECT(Rf_lang3(simple_error_sym, msg_sexp, quoted_call));
   SEXP cond = PROTECT(Rf_eval(se_call, R_BaseEnv));
   SEXP stop_call = PROTECT(Rf_lang2(stop_sym, cond));
 
   Rf_eval(stop_call, R_BaseEnv);
 
-  UNPROTECT(4);
+  UNPROTECT(5);
 }
 
 static void notify_wrong_dots_use(SEXP var, CompilerContext *cntxt, Loc loc) {
@@ -806,7 +808,9 @@ static void notify_assign_syntactic_fun(NamesList funs, CompilerContext *cntxt, 
 }
 
 static char *format_bad_assignment_msg(SEXP expr) {
-  SEXP deparse_call = PROTECT(Rf_lang2(Rf_install("deparse"), expr));
+  // Quote the expression. Rf_eval() must not evaluate it.
+  SEXP quoted_expr = Rf_lang2(Rf_install("quote"), expr);
+  SEXP deparse_call = PROTECT(Rf_lang2(Rf_install("deparse"), quoted_expr));
   SEXP de = PROTECT(Rf_eval(deparse_call, R_BaseEnv));
 
   if (TYPEOF(de) != STRSXP || Rf_length(de) == 0) {

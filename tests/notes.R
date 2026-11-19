@@ -59,6 +59,17 @@ same(function(x) `if`(x))
 same(function() `if`())
 same(function(x) if (x) 1 else 2 + `if`(x))
 
+## The compiler must not evaluate the code of the user before an error.
+bc <- compiler::compile(quote(1))
+f <- function() NULL
+body(f) <- as.call(list(quote(message), "EVALUATED", bc))
+same(f)
+body(f) <- as.call(list(quote(g), quote(message("EVALUATED")), bc))
+same(f)
+## A bad assignment. This test examines only the output.
+body(f) <- call("<-", quote(g(1)), quote(message("EVALUATED")))
+stopifnot(length(run(crbcc::cmpfun, f, NULL)$out) == 0)
+
 ## The arguments of cmpfun are the same as in GNU R.
 stopifnot(identical(formals(crbcc::cmpfun), formals(compiler::cmpfun)))
 
