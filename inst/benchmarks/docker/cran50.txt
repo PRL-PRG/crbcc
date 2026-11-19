@@ -1,5 +1,7 @@
-# The 50 CRAN packages with the most downloads from 2026-10-16 to 2026-11-14:
-# the first 50 of https://cranlogs.r-pkg.org/top/last-month/100.
+# The 100 CRAN packages with the most downloads from 2026-10-16 to 2026-11-14
+# (https://cranlogs.r-pkg.org/top/last-month/100). cranlogs gives a maximum of
+# 100 packages.
+# This file has only the first 50 of these packages.
 rlang
 ggplot2
 cli
