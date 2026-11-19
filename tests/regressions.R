@@ -41,7 +41,9 @@ same(f)
 makeActiveBinding("ab", function() function(a) NULL, environment())
 f <- function() ab(1, 2)
 expected <- capture.output(invisible(compiler::cmpfun(f, opts)))
-gctorture2(10)
-out <- capture.output(invisible(crbcc::cmpfun(f, opts)))
-gctorture2(0)
-stopifnot(identical(out, expected))
+for (step in 2:10) {
+  gctorture2(step)
+  out <- capture.output(invisible(crbcc::cmpfun(f, opts)))
+  gctorture2(0)
+  stopifnot(identical(out, expected))
+}
