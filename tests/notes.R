@@ -151,6 +151,8 @@ same(function() -"a")
 same(function() 1:3 + 1:2)
 same(function() sqrt(-1), list(optimize = 3, suppressAll = FALSE))
 same(function() sqrt(4) + log(-1L) + exp(1) - 1i, list(optimize = 3, suppressAll = FALSE))
+same(function() (-Inf)^1e308)
+same(function() exp(1e309i), list(optimize = 3, suppressAll = FALSE))
 
 ## compile() gives the variables of the code the frame type of env, as GNU R
 ## does. For the global environment, the type is "global".
