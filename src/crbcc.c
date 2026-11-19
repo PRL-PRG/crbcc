@@ -218,6 +218,7 @@ typedef struct CompilerEnv {
 
   struct EnvFrame *top_frame;     // Current frame being compiled
   SEXP r_env;                     // R environment object
+  SEXP top_env;                   // topenv() of r_env
 
 } CompilerEnv;
 
@@ -1697,11 +1698,19 @@ bool find_loc_var(SEXP var, CompilerContext *cntxt) {
   CompilerEnv *cenv = cntxt->env;
   VarInfo var_info = find_cenv_var(var, cenv);
 
-  if (var_info.found && var_info.defining_frame != NULL) {
-    return true;
-  } else {
+  if (!var_info.found)
     return false;
+  if (var_info.defining_frame != NULL)
+    return true;
+
+  // As in makeCenv() of GNU R, the frames below topenv() are local. Do this
+  // test here and not in find_cenv_var(), because that function is hot.
+  for (SEXP env = cenv->r_env; env != cenv->top_env && env != R_EmptyEnv && env != R_NilValue;
+       env = R_ParentEnv(env)) {
+    if (env == var_info.env)
+      return true;
   }
+  return false;
 }
 
 VarInfo find_cenv_var(SEXP var, CompilerEnv *cenv) {
@@ -1966,6 +1975,10 @@ CompilerEnv *make_cenv(SEXP env) {
 
   CompilerEnv *cenv = (CompilerEnv *) R_alloc(1, sizeof(CompilerEnv));
   cenv->r_env = env;
+  // frameTypes() of GNU R calls topenv(env). The default matchThisEnv of
+  // topenv() is this option.
+  SEXP target = Rf_GetOption1(Rf_install("topLevelEnvironment"));
+  cenv->top_env = Rf_topenv(TYPEOF(target) == ENVSXP ? target : R_NilValue, env);
 
   cenv->top_frame = (EnvFrame *) R_alloc(1, sizeof(EnvFrame));
 
@@ -2003,6 +2016,7 @@ CompilerEnv *make_fun_env(SEXP forms, SEXP body, CompilerContext *cntxt) {
   CompilerEnv *new_cenv = (CompilerEnv *) R_alloc(1, sizeof(CompilerEnv));
   new_cenv->top_frame = cntxt->env->top_frame;
   new_cenv->r_env = cntxt->env->r_env;
+  new_cenv->top_env = cntxt->env->top_env;
 
   add_cenv_frame(new_cenv, extract_names(forms));
 

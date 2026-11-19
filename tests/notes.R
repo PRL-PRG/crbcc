@@ -44,6 +44,12 @@ same(function() { y ~ (v4 <- 1); v4 })
 same(function() { quote <- identity; quote(v5 <- 1); v5 })
 same(function() { assign("c", function(...) 1); c(1, 2) })
 same(function() { `~` <- 1; `function` <- 2; `<-` <- 3; `for` <- 4; `=` <- 5; 6 })
+## The frames below topenv() of the closure environment are local, as in
+## GNU R. The compiler does not examine a call to a local function.
+same(local({ g <- function(a) NULL; function() g(1, 2) }))
+same(local({ sum <- function(a) a; function() sum(1, 2) }))
+same((function() { g <- function(a) NULL; function() g(1, 2) })())
+same((function(...) function() list(..1, ...))(1))
 
 ## The other notes.
 same(src("function() {\n  zzz()\n}"))
