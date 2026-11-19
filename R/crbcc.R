@@ -12,11 +12,14 @@
 #'
 #' @export
 cmpfun <- function(f, options = NULL) {
-  # The same as compiler::cmpfun.
-  if (typeof(f) %in% c("builtin", "special")) {
+  # The same as compiler::cmpfun. The tests use only typeof(): a call to %in%
+  # or to an R function is slow in comparison with the compile of a small
+  # closure.
+  type <- typeof(f)
+  if (type == "builtin" || type == "special") {
     return(f)
   }
-  if (!is_closure(f)) {
+  if (type != "closure") {
     stop("cannot compile a non-function")
   }
 
@@ -29,18 +32,6 @@ cmpfun <- function(f, options = NULL) {
   }
 
   .Call(C_cmpfun, f, options)
-}
-
-#' Check if Object is a Closure
-#'
-#' Internal helper function to check if an object is a closure
-#' (user-defined function as opposed to built-in functions).
-#'
-#' @param x Object to test
-#' @return Logical value indicating if x is a closure
-#' @keywords internal
-is_closure <- function(x) {
-  is.function(x) && !is.primitive(x) && typeof(x) == "closure"
 }
 
 #' Compile a Generic Language Object
