@@ -2197,7 +2197,12 @@ CodeBuffer *make_code_buffer(SEXP preseed, Loc loc) {
   cb->constant_pool_handle = Rf_allocVector(VECSXP, 1);
   PROTECT(cb->constant_pool_handle);
 
-  cb->code_capacity = 128; // Initial capacity - maybe move out into constant
+  // Most code objects are promises with few instructions and constants.
+  // R_alloc() of more than 127 bytes makes a large vector. R gets a large
+  // vector with malloc(), and the GC releases it with free(). Smaller blocks
+  // come from the small vector pools of R, which is faster. Thus the initial
+  // sizes here and in cb_putconst() are small.
+  cb->code_capacity = 16;
   cb->code_count = 0;
   cb->code = (int *) R_alloc(cb->code_capacity, sizeof(int));
 
@@ -2570,7 +2575,7 @@ int cb_putconst(CodeBuffer *cb, SEXP item) {
 
   // Initialize constant pool if it doesn't exist
   if (cb->constant_pool == R_NilValue) {
-    cb->const_capacity = 16;
+    cb->const_capacity = 8;
     cb->const_count = 0;
 
     cb->constant_pool = PROTECT(Rf_allocVector(VECSXP, cb->const_capacity));
