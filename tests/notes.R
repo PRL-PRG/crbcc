@@ -153,6 +153,14 @@ same(function() sqrt(-1), list(optimize = 3, suppressAll = FALSE))
 same(function() sqrt(4) + log(-1L) + exp(1) - 1i, list(optimize = 3, suppressAll = FALSE))
 same(function() (-Inf)^1e308)
 same(function() exp(1e309i), list(optimize = 3, suppressAll = FALSE))
+## A constant range with 2^31 or more elements. GNU R does not fold it,
+## because it is long. The compile does not allocate the elements.
+for (level in 0:3) {
+  for (b in list(quote(1:1e10), quote(for (i in 1:1e10) NULL), quote(x[0:2147483647L]))) {
+    body(f) <- b
+    same(f, list(optimize = level, suppressAll = FALSE))
+  }
+}
 
 ## compile() gives the variables of the code the frame type of env, as GNU R
 ## does. For the global environment, the type is "global".

@@ -892,7 +892,9 @@ Folded check_const(SEXP e) {
 
   const int MAX_CONST_SIZE = 10;
 
-  if (is_const_mode(e) && Rf_length(e) <= MAX_CONST_SIZE) {
+  // Rf_length() stops for a long vector, for example the result of 1:1e10.
+  // Rf_xlength() does not allocate the elements of a compact sequence.
+  if (is_const_mode(e) && Rf_xlength(e) <= MAX_CONST_SIZE) {
 
     Folded res = { true, e };
     return res;
