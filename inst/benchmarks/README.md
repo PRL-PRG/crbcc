@@ -62,11 +62,14 @@ defines.
   compares the byte code (`crbcc:::identical_strict`). If a byte code
   differs or a compiler stops with an error, the run fails. If a package has
   no closures, the run also fails.
-- The suite `compile` compiles each closure in 3 runs with each compiler. It
-  records the compile time and the size of each closure. Each run compiles
-  the closures in a different random order. Thus a garbage collection or a
-  lazy load occurs in a different closure in each run, and the median of the
-  runs removes its time.
+- The suite `compile` starts one R process for each package and compiler.
+  The process compiles each closure one time without a measurement (the
+  warm-up pass). Then it compiles each closure in 3 timed passes, and records
+  the compile time and the size of each closure. Each timed pass starts with
+  `gc()` and compiles the closures in a new random order. Thus a garbage
+  collection occurs in a different closure in each pass, and the median of
+  the passes removes its time. The times are warm. For the compile time in
+  real installs, refer to the metric `bytecode` of the suite `install`.
 
 The suite `compile` uses the 65 packages of the install benchmark. The suite
 `check` uses the base packages without `datasets` and `tcltk`, and the same
@@ -167,7 +170,8 @@ cp install.csv compile.csv site/
 | Option                               | Use                                                                                                      |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
 | `--include REGEX`, `--exclude REGEX` | Select the benchmarks, for example `--include '^check/'`.                                                |
-| `--runs N`                           | The runs of each package and compiler in the suites `install` and `compile`. The default is 3.           |
+| `--runs N`                           | The runs of each package and compiler in the suite `install`. The default is 3.                          |
+| `--passes N`                         | The timed passes of each closure in the suite `compile`, in one R process. The default is 3.             |
 | `--installed`                        | The suite `check` also uses all other installed packages.                                                |
 | `--commit SHA`                       | The crbcc commit for the CSV header.                                                                     |
 | `-j N`                               | Run N benchmarks in parallel. Use it only for the suite `check`, because parallel runs change the times. |
