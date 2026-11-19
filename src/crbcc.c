@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "hash.h"
 
@@ -228,6 +229,9 @@ typedef struct LabelTable {
 
 } LabelTable;
 
+// It must be a power of two, because cb_putconst() selects a slot with a mask.
+#define RECENT_CONST_SLOTS 32
+
 typedef struct CodeBuffer {
 
   // Instruction stream
@@ -256,6 +260,7 @@ typedef struct CodeBuffer {
 
   int expr_const_idx;              // Pool index of the last current_expr, -1 if none
   int srcref_const_idx;            // Pool index of the last current_srcref, -1 if none
+  int recent_const_idx[RECENT_CONST_SLOTS]; // Pool indices of recent items by address, -1 if none
 
   bool srcref_tracking_on;         // Is source reference tracking on
   bool expr_tracking_on;           // Is expression tracking on
@@ -2220,6 +2225,8 @@ CodeBuffer *make_code_buffer(SEXP preseed, Loc loc) {
   cb->const_count = 0;
   cb->expr_const_idx = -1;
   cb->srcref_const_idx = -1;
+  for (int i = 0; i < RECENT_CONST_SLOTS; i++)
+    cb->recent_const_idx[i] = -1;
 
   cb->switch_patches = NULL;
   cb->patch_tail = NULL;
@@ -2556,11 +2563,17 @@ void cb_putcode(CodeBuffer *cb, ...) {
  * end. This search is linear, thus the compile time of a function is
  * quadratic in the size of its pool.
  *
- * We have two shortcuts that give the same index as the linear search:
+ * Three faster methods give the same index as the linear search:
  *  - cb_putconst_cached keeps the last index of current_expr and of
  *    current_srcref. cb_putcode puts these two items after each instruction.
  *    If the pool entry at that index is the same object as the item, the
  *    index is correct, because no entry before it is identical to it.
+ *  - cb_putconst keeps the index of each recent item in recent_const_idx, at
+ *    a slot that the address of the item selects. If the pool entry at that
+ *    index is the same object as the item, the index is correct, for the
+ *    same reason. The compiler puts many items again, for example the
+ *    current expression after the compile of a subexpression. For these
+ *    items, this test is much faster than cp_hash.
  *  - cb_putconst hashes the constant pool indices keeping the candidates in a
  *    hash table. const_hash keeps the hash of each pool entry. const_table
  *    keeps the pool indices, with linear probing.
@@ -2599,6 +2612,10 @@ int cb_putconst(CodeBuffer *cb, SEXP item) {
     cb_const_table_resize(cb, 2 * cb->const_capacity);
   }
 
+  int *recent = &cb->recent_const_idx[((uintptr_t) item >> 4) & (RECENT_CONST_SLOTS - 1)];
+  if (*recent >= 0 && VECTOR_ELT(cb->constant_pool, *recent) == item)
+    return *recent;
+
   /*
    * Find the entry with the lowest index that is identical to item. This is
    * the same entry that do_putconst in GNU R finds.
@@ -2622,8 +2639,10 @@ int cb_putconst(CodeBuffer *cb, SEXP item) {
     SEXP compare = VECTOR_ELT(cb->constant_pool, j);
 
     // 16 - take closure environments into account, same as do_putconst in internals
-    if (item == compare || R_compute_identical(item, compare, 16))
+    if (item == compare || R_compute_identical(item, compare, 16)) {
+      *recent = j;
       return j;
+    }
   }
 
   // Resize constant pool if full
@@ -2665,6 +2684,7 @@ int cb_putconst(CodeBuffer *cb, SEXP item) {
     cb->const_table[i] = new_idx;
   }
 
+  *recent = new_idx;
   return new_idx;
 }
 
