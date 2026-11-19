@@ -63,8 +63,7 @@ file.
 To install a package from a shell, set `R_PROFILE_USER` for R CMD INSTALL:
 
 ```sh
-R_PROFILE_USER=$(Rscript -e 'cat(crbcc::r_cmd_install_hook_path())') \
-  R CMD INSTALL foo_1.0.tar.gz
+R_PROFILE_USER=$(Rscript -e 'cat(crbcc::r_cmd_install_hook_path())') R CMD INSTALL foo_1.0.tar.gz
 ```
 
 If crbcc cannot compile a closure, the hook compiles it with the compiler

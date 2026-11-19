@@ -13,14 +13,14 @@ the last push to `main`.
 
 ## Files
 
-| File | Contents |
-|---|---|
-| `crbcc_bench.py` | The benchmark tool, with the suites `install`, `check` and `closures`. It uses [bench](https://github.com/PRL-PRG/bench). The docstring gives the CSV columns. |
-| `closures.R` | Compiles each closure of a package for the suites `check` and `closures`. |
-| `timing-profile.R` | Measures the native and bytecode times in the suite `install`. |
-| `crbcc_bench.Rmd` | The benchmark report. |
-| `docker/` | The benchmark image. `cran50.txt` has the 50 CRAN packages with the most downloads. |
-| `../r-cmd-install-hook.R` | The hook that the crbcc runs of the suite `install` use. |
+| File                      | Contents                                                                                                                                                       |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crbcc_bench.py`          | The benchmark tool, with the suites `install`, `check` and `closures`. It uses [bench](https://github.com/PRL-PRG/bench). The docstring gives the CSV columns. |
+| `closures.R`              | Compiles each closure of a package for the suites `check` and `closures`.                                                                                      |
+| `timing-profile.R`        | Measures the native and bytecode times in the suite `install`.                                                                                                 |
+| `crbcc_bench.Rmd`         | The benchmark report.                                                                                                                                          |
+| `docker/`                 | The benchmark image. `cran50.txt` has the 50 CRAN packages with the most downloads.                                                                            |
+| `../r-cmd-install-hook.R` | The hook that the crbcc runs of the suite `install` use.                                                                                                       |
 
 ## Install benchmark
 
@@ -146,14 +146,14 @@ cp install.csv closures.csv site/
 
 ### Options of `crbcc_bench.py`
 
-| Option | Use |
-|---|---|
-| `--include REGEX`, `--exclude REGEX` | Select the benchmarks, for example `--include '^check/'`. |
-| `--runs N` | The runs of each package and compiler in the suites `install` and `closures`. The default is 3. |
-| `--installed` | The suites `check` and `closures` also use all other installed packages. |
-| `--commit SHA` | The crbcc commit for the CSV header. |
-| `-j N` | Run N benchmarks in parallel. Use it only for the suite `check`, because parallel runs change the times. |
-| `--csv FILE` | Write the CSV report. |
-| `--list` | Show the benchmarks, and do not run them. |
+| Option                               | Use                                                                                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `--include REGEX`, `--exclude REGEX` | Select the benchmarks, for example `--include '^check/'`.                                                |
+| `--runs N`                           | The runs of each package and compiler in the suites `install` and `closures`. The default is 3.          |
+| `--installed`                        | The suites `check` and `closures` also use all other installed packages.                                 |
+| `--commit SHA`                       | The crbcc commit for the CSV header.                                                                     |
+| `-j N`                               | Run N benchmarks in parallel. Use it only for the suite `check`, because parallel runs change the times. |
+| `--csv FILE`                         | Write the CSV report.                                                                                    |
+| `--list`                             | Show the benchmarks, and do not run them.                                                                |
 
 For all options, use `--help`.

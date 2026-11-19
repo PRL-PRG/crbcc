@@ -173,5 +173,4 @@ pull request and each push to `main`.
 
 - The compiler notes are in English only. GNU R translates them to the
   language of the R session.
-- `cmpfile()` currently does not support a functional `verbose` mode (the argument exists but is not implemented).
 - Saving and loading functionality is not compatible with the GNU-R compiler, since it uses an .Internal call to manage the files.
