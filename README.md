@@ -24,7 +24,9 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 The figure shows the installation time of the 15 packages with the
 longest GNU R installation time. `R CMD INSTALL` builds each package from the
 CRAN source, also its native code. The left panel is the elapsed time of
-`R CMD INSTALL`, and the right panel is the time in the byte-code compiler.
+`R CMD INSTALL`, and the middle panel is the time in the byte-code compiler.
+The right panel is the part of the GNU R elapsed time that the GNU R
+byte-code compiler uses.
 
 For more details check the [benchmark report](https://prl-prg.github.io/crbcc/).
 
@@ -142,8 +144,9 @@ Linux and macOS.
 The integration test compiles each closure of each package in the benchmark
 Docker image with the two compilers, and compares the byte code (see
 [Benchmarks](#benchmarks)). These closures include the S4 methods and the R6
-methods. The image build runs this test, and the CI job `closures` runs it
-for the base and recommended packages. To run it in the image:
+methods. The image build runs this test, and the CI job `compile` runs it
+for the base packages and the 65 packages of the install benchmark. To run it
+in the image:
 
 ```bash
 docker run --rm -v "$PWD":/crbcc -w /crbcc \
@@ -157,9 +160,9 @@ The benchmarks check the correctness of crbcc and compare its performance
 with the GNU-R compiler. The install benchmark measures `R CMD INSTALL` of
 the 50 CRAN packages with the most downloads and the 15 recommended packages,
 from the source. It runs when the benchmark Docker image is built, one time
-for each crbcc version. The closures benchmark measures the compile time of
-each closure of the base and recommended packages. The CI runs it for each
-pull request and each push to `main`.
+for each crbcc version. The compile benchmark measures the compile time of
+each closure of the same 65 packages. The CI runs it for each pull request
+and each push to `main`.
 
 - [Benchmark report](https://prl-prg.github.io/crbcc/): the results of the
   last push to `main`. The source is `inst/benchmarks/crbcc_bench.Rmd`.
