@@ -2323,7 +2323,11 @@ void cmp_call(SEXP call, CodeBuffer *cb, CompilerContext *cntxt, bool inline_ok)
   Loc saved = cb_savecurloc(cb);
   cb_setcurexpr(cb, call);
 
-  cntxt = make_call_ctx(cntxt, call);
+  // As make_call_ctx(), but on the stack. cmp_call() is the most frequent
+  // caller, and each R_alloc() makes an object on the R heap.
+  CompilerContext call_cntxt = *cntxt;
+  call_cntxt.call = call;
+  cntxt = &call_cntxt;
   SEXP fun = CAR(call);
   SEXP args = CDR(call);
 
