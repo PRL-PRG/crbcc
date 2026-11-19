@@ -15,12 +15,12 @@ the last push to `main`.
 
 ## Files
 
-| File | Contents |
-|---|---|
-| `crbcc_bench.py` | The benchmark script. It uses [bench](https://github.com/PRL-PRG/bench), which runs the suites and writes the CSV report. |
-| `crbcc_bench.Rmd` | The benchmark report. The CI puts it on <https://prl-prg.github.io/crbcc/>. |
-| `docker/` | The Docker image `ghcr.io/prl-prg/crbcc-benchmarks`. |
-| `../r-cmd-install-hook.R` | The hook that compiles and measures each closure during `R CMD INSTALL`. |
+| File                      | Contents                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `crbcc_bench.py`          | The benchmark script. It uses [bench](https://github.com/PRL-PRG/bench), which runs the suites and writes the CSV report. |
+| `crbcc_bench.Rmd`         | The benchmark report. The CI puts it on <https://prl-prg.github.io/crbcc/>.                                               |
+| `docker/`                 | The Docker image `ghcr.io/prl-prg/crbcc-benchmarks`.                                                                      |
+| `../r-cmd-install-hook.R` | The hook that compiles and measures each closure during `R CMD INSTALL`.                                                  |
 
 ## What the benchmarks measure
 
@@ -51,13 +51,13 @@ The metrics:
 
 The package sets (`--packages`, you can use the option more than one time):
 
-| Set | Packages |
-|---|---|
-| `small` | MASS, Matrix, lattice, mgcv and survival (the default) |
-| `recommended` | the 15 recommended packages |
-| `cran100` | the 100 CRAN packages with the most downloads (`docker/cran100.txt`) |
-| `top50` | the first 50 packages of cran100 |
-| `all` | only in the Docker image: all 158 packages of the image, also the dependencies |
+| Set           | Packages                                                                       |
+| ------------- | ------------------------------------------------------------------------------ |
+| `small`       | MASS, Matrix, lattice, mgcv and survival (the default)                         |
+| `recommended` | the 15 recommended packages                                                    |
+| `cran100`     | the 100 CRAN packages with the most downloads (`docker/cran100.txt`)           |
+| `top50`       | the first 50 packages of cran100                                               |
+| `all`         | only in the Docker image: all 158 packages of the image, also the dependencies |
 
 ## The Docker image
 
@@ -74,7 +74,7 @@ Package Manager, 2026-11-12). `docker/build-packages.R` makes the image
 content in `/opt/crbcc-benchmarks`:
 
 1. It installs each package from the source with GNU R. Packages in the
-   same dependency level install in parallel. After the installation, the
+   same dependency level (top-sorted) install in parallel. After the installation, the
    script keeps the source tree of the package, with the compiled code and
    the output of `configure`, as `prebuilt/<package>.tar.gz`. `lib/` has the
    installed packages.
@@ -161,17 +161,17 @@ check, thus the report cannot use these results.
 
 ### Options
 
-| Option | Use |
-|---|---|
-| `--r PATH` | The R executable. |
-| `--packages SET` | The package set (see above). |
-| `--compilers gnur\|crbcc` | The compilers of the suite install. The default is the two compilers. |
-| `--runs N` | The runs of each package in the suite install. The default is 3. |
-| `--prebuilt PATH` | The image content, `/opt/crbcc-benchmarks`. With this option, the script also runs the suite check. |
-| `--include REGEX`, `--exclude REGEX` | Select the benchmarks, for example `--include '^check/'`. |
-| `-j N` | Run N benchmarks in parallel. Use it only for the suite check, because parallel runs change the times. |
-| `--csv FILE`, `--json FILE` | Write the report. `crbcc_bench.Rmd` reads the CSV. |
-| `--list`, `--dry` | Show the benchmarks, and do not run them. |
+| Option                               | Use                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `--r PATH`                           | The R executable.                                                                                      |
+| `--packages SET`                     | The package set (see above).                                                                           |
+| `--compilers gnur\|crbcc`            | The compilers of the suite install. The default is the two compilers.                                  |
+| `--runs N`                           | The runs of each package in the suite install. The default is 3.                                       |
+| `--prebuilt PATH`                    | The image content, `/opt/crbcc-benchmarks`. With this option, the script also runs the suite check.    |
+| `--include REGEX`, `--exclude REGEX` | Select the benchmarks, for example `--include '^check/'`.                                              |
+| `-j N`                               | Run N benchmarks in parallel. Use it only for the suite check, because parallel runs change the times. |
+| `--csv FILE`, `--json FILE`          | Write the report. `crbcc_bench.Rmd` reads the CSV.                                                     |
+| `--list`, `--dry`                    | Show the benchmarks, and do not run them.                                                              |
 
 For all options, use `--help`. The docstring of `crbcc_bench.py` gives the
 CSV columns.

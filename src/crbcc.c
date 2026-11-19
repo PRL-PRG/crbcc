@@ -2902,7 +2902,9 @@ SEXP compile(SEXP e, SEXP env, SEXP options, SEXP srcref) {
     return gen_code(e, cntxt, loc);
 }
 
-SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP srefs, SEXP verbose) {
+// report is NULL or an R function. If it is a function, cmpfile calls
+// report(i) before it compiles form i (1-based).
+SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP srefs, SEXP report) {
 
   SEXP ret_cforms = PROTECT(Rf_allocVector(VECSXP, INTEGER(nforms)[0]));
 
@@ -2920,7 +2922,11 @@ SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP 
       sref = VECTOR_ELT(srefs, i);
     }
 
-    // TODO verbose option - currently disabled at R level
+    if (report != R_NilValue) {
+      SEXP call = PROTECT(Rf_lang2(report, Rf_ScalarInteger(i + 1)));
+      Rf_eval(call, R_BaseEnv);
+      UNPROTECT(1);
+    }
 
     Loc loc = { false, e, sref };
 
