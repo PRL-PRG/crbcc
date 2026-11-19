@@ -2857,7 +2857,7 @@ SEXP code_buf_code(CodeBuffer *cb, CompilerContext *cntxt) {
   SEXP code_vec = PROTECT(Rf_allocVector(INTSXP, cb->code_count + 1));
 
   // Put bytecode version as first instruction
-  INTEGER(code_vec)[0] = Rf_asInteger(R_bcVersion());
+  INTEGER(code_vec)[0] = BCVersion;
   memcpy(INTEGER(code_vec) + 1, cb->code, cb->code_count * sizeof(int));
 
   SEXP const_pool;
