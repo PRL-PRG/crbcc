@@ -223,7 +223,9 @@ if (nzchar(params$assets)) {
 # Introduction
 
 crbcc compiles R code to byte code. It gives the same byte code as the GNU R
-`compiler` package, but it is faster.
+`compiler` package, but it is faster because it is implemented
+directly in C instead of in R. It follows the same structure as the
+original compiler so all credit goes to Luke Tierney.
 
 - [README and source code](https://github.com/PRL-PRG/crbcc#readme)
 - [Use crbcc](https://prl-prg.github.io/crbcc/crbcc.html): compile closures
@@ -261,16 +263,9 @@ recommended packages. Each install is `R CMD INSTALL` of the CRAN source
 tarball. It runs `configure` and compiles the native code with
 `MAKEFLAGS=-j8`. For each package, `r ins_runs` runs with GNU R come first,
 then `r ins_runs` runs with crbcc. The installs run one at a time.
-The benchmark sets `OPENBLAS_NUM_THREADS=1` for each R process, because one
-OpenBLAS thread for each CPU adds CPU time that depends on the machine.
 
-Each install goes into an empty library. Thus all dependencies come from the
-image library, which GNU R compiled.
-
-For crbcc, R reads the hook `inst/r-cmd-install-hook.R`, which replaces the
-byte-code compiler with crbcc. In each R process,
-`inst/benchmarks/timing-profile.R` measures the time in two functions. It
-only reads the clock. Each run gives three numbers:
+We `inst/benchmarks/timing-profile.R` to inject timers into the
+installation process. Each run gives three numbers:
 
 - **elapsed**: the wall time of `R CMD INSTALL`.
 - **native**: the time in `tools:::.shlib_internal`, which compiles and links
@@ -279,9 +274,8 @@ only reads the clock. Each run gives three numbers:
   closure to byte code.
 
 The value of a package is the median of its runs. A total is the sum of the
-package values. The rest is elapsed - native - bytecode. In this time, R
-parses the code, makes the lazy-load database and the help pages, and loads
-the package to test it. The statistics do not use failed runs.
+package values. The `rest` is `elapsed - native - bytecode` (code parsing, 
+installed package test loading, ...).
 
 The tables compare the two compilers:
 
@@ -411,11 +405,8 @@ steps:
    benchmark measures the time of each `cmpfun()` call. Each timed pass
    starts with `gc()` and compiles the closures in a new random order.
 
-Thus the times are warm: the same process compiled each closure one time
-before the timed passes. The times do not include the first compile of a
-closure, which can load code of the compiler and force lazy-load promises.
-For the compile time in real installs, refer to the bytecode metric of the
-[install benchmark](#install-results).
+The times do not include the first compile of a closure, which can load code of
+the compiler and force lazy-load promises.
 
 The value of a closure is the median of its passes. Because of the random
 order, a garbage collection occurs in a different closure in each pass, and

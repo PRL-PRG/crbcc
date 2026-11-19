@@ -11,14 +11,17 @@ It is intended as a fast, drop-in alternative to the base `compiler` package.
 
 ## Acknowledgement
 
-When possible, `crbcc` mirrors the architecture and logic used in the original GNU-R compiler package by Luke Tierney. The original compiler Noweb document is available at <https://homepage.cs.uiowa.edu/~luke/R/compiler/compiler.pdf>, or distributed as an R base package, available under the GPL-2 license. Most documentation provided in the document is relevant to `crbcc` as well.
+When possible, `crbcc` mirrors the architecture and logic used in the original
+GNU-R [compiler](https://homepage.cs.uiowa.edu/~luke/R/compiler/compiler.pdf)
+package by Luke Tierney. We gain the performance by writing it in C instead of
+R (plus a few tricks).
 
 ## Features
 
 - The output is the same as the output of the GNU-R compiler.
 - It compiles the closures faster than the GNU-R compiler - check the badge above!
 - Package installation is often dominated by the native code compilation (C/C++/Fortran)
-  but even with that crbcc can save approximately 25% of the time.
+  but even with that crbcc can save approximately **25% of the time**.
 
 [![Installation time of the 15 packages with the longest GNU R installation time](https://prl-prg.github.io/crbcc/install-time-top15.png)](https://prl-prg.github.io/crbcc/#install-results)
 The figure shows the installation time of the 15 packages with the
