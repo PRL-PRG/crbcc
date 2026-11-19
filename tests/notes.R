@@ -140,6 +140,19 @@ same(function() 1:3 + 1:2)
 same(function() sqrt(-1), list(optimize = 3, suppressAll = FALSE))
 same(function() sqrt(4) + log(-1L) + exp(1) - 1i, list(optimize = 3, suppressAll = FALSE))
 
+## compile() gives the variables of the code the frame type of env, as GNU R
+## does. For the global environment, the type is "global".
+same_compile <- function(e) {
+  options <- list(suppressAll = FALSE)
+  gnur <- run(compiler::compile, e, options)
+  crbcc <- run(crbcc::compile, e, options)
+  stopifnot(identical(gnur$out, crbcc$out),
+            crbcc:::identical_strict(gnur$code, crbcc$code))
+}
+same_compile(quote({ zzz <- function(a) NULL; zzz(1, 2) }))
+g <- function(a) NULL
+same_compile(quote({ g <- function(a) NULL; g(1, 2) }))
+
 ## The arguments of cmpfun are the same as in GNU R.
 stopifnot(identical(formals(crbcc::cmpfun), formals(compiler::cmpfun)))
 
