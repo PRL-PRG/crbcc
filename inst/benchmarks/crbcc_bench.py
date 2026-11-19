@@ -152,6 +152,9 @@ def r_env() -> dict[str, str]:
         "R_LIBS": ":".join(libs),
         "R_ENVIRON_USER": "/dev/null",
         "R_MAKEVARS_USER": "/dev/null",
+        # Without this, each R process starts one OpenBLAS thread for each
+        # CPU. These threads use CPU time that depends on the machine.
+        "OPENBLAS_NUM_THREADS": "1",
     }
 
 

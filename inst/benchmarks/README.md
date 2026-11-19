@@ -29,6 +29,9 @@ the 15 recommended packages. Each install is `R CMD INSTALL` of the CRAN
 source tarball. It runs `configure` and compiles the native code with
 `MAKEFLAGS=-j8`. For each package, 3 runs with GNU R come first, then 3 runs
 with crbcc. The installs run one at a time. The crbcc runs read the hook.
+In all suites, the script sets `OPENBLAS_NUM_THREADS=1` for each R process,
+because one OpenBLAS thread for each CPU adds CPU time that depends on the
+machine.
 
 Each install goes into an empty library. Thus all dependencies come from the
 image library, which GNU R compiled.
