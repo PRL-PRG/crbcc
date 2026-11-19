@@ -403,7 +403,7 @@ bool find_var(SEXP var, CompilerContext *cntxt);
 NamesList find_locals_list(SEXP elist, SEXP e, CompilerContext *cntxt);
 SEXP gen_code(SEXP e, CompilerContext *cntxt, Loc loc);
 const char *get_assigned_var(SEXP var, CompilerContext *cntxt);
-bool may_call_browser(SEXP expr, CompilerContext *cntxt);
+bool may_call_browser(SEXP expr, CompilerContext *cntxt, const char *gnur_call);
 bool may_call_browser_list(SEXP exprlist, CompilerContext *cntxt);
 void R_init_crbcc(DllInfo *dll);
 VarInfo find_cenv_var(SEXP var, CompilerEnv *cenv);
@@ -2767,15 +2767,39 @@ int cb_putconst(CodeBuffer *cb, SEXP item) {
   return new_idx;
 }
 
-bool may_call_browser(SEXP expr, CompilerContext *cntxt) {
+// Stops with the error of GNU R for a call to the empty symbol. GNU R stops
+// at typeof(fun) in mayCallBrowser(). The condition has the call of
+// mayCallBrowser() at the place in the R code of GNU R, for example
+// "mayCallBrowser(a, cntxt)". The call and the class can change with the R
+// version.
+static void stop_missing_fun(const char *gnur_call) {
+  SEXP text = PROTECT(Rf_mkString(gnur_call));
+  SEXP call = PROTECT(Rf_eval(PROTECT(Rf_lang2(Rf_install("str2lang"), text)), R_BaseEnv));
+  SEXP cond = PROTECT(Rf_allocVector(VECSXP, 2));
+  SET_VECTOR_ELT(cond, 0, Rf_mkString("argument \"fun\" is missing, with no default"));
+  SET_VECTOR_ELT(cond, 1, call);
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 2));
+  SET_STRING_ELT(names, 0, Rf_mkChar("message"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("call"));
+  Rf_setAttrib(cond, R_NamesSymbol, names);
+  SEXP class = PROTECT(Rf_allocVector(STRSXP, 4));
+  SET_STRING_ELT(class, 0, Rf_mkChar("getvarError"));
+  SET_STRING_ELT(class, 1, Rf_mkChar("missingArgError"));
+  SET_STRING_ELT(class, 2, Rf_mkChar("error"));
+  SET_STRING_ELT(class, 3, Rf_mkChar("condition"));
+  Rf_setAttrib(cond, R_ClassSymbol, class);
+  Rf_eval(PROTECT(Rf_lang2(Rf_install("stop"), cond)), R_BaseEnv);
+  UNPROTECT(7);
+}
+
+bool may_call_browser(SEXP expr, CompilerContext *cntxt, const char *gnur_call) {
 
   if (TYPEOF(expr) == LANGSXP) {
 
     SEXP fun = CAR(expr);
 
-    // GNU R stops in mayCallBrowser(), at typeof(fun) of the empty symbol.
     if (fun == R_MissingArg)
-      Rf_error("argument \"fun\" is missing, with no default");
+      stop_missing_fun(gnur_call);
 
     if (TYPEOF(fun) == SYMSXP) {
 
@@ -2804,7 +2828,7 @@ bool may_call_browser_list(SEXP exprlist, CompilerContext *cntxt) {
 
     SEXP expr = CAR(node);
 
-    if ((expr != R_MissingArg) && may_call_browser(expr, cntxt))
+    if ((expr != R_MissingArg) && may_call_browser(expr, cntxt, "mayCallBrowser(a, cntxt)"))
       return true;
 
     node = CDR(node);
@@ -2872,7 +2896,7 @@ SEXP cmpfun(SEXP f, SEXP compiler_options) {
       CompilerContext *ncntxt =
           make_function_ctx(cntxt, fenv, R_ClosureFormals(f), R_ClosureExpr(f));
 
-      if (may_call_browser(R_ClosureExpr(f), ncntxt)) {
+      if (may_call_browser(R_ClosureExpr(f), ncntxt, "mayCallBrowser(body(f), ncntxt)")) {
         return f;
       }
 
@@ -3021,7 +3045,7 @@ SEXP compile(SEXP e, SEXP env, SEXP options, SEXP srcref) {
 
   add_cenv_vars(cenv, find_locals_list(R_NilValue, e, cntxt));
 
-  if (may_call_browser(e, cntxt))
+  if (may_call_browser(e, cntxt, "mayCallBrowser(e, cntxt)"))
     return e;
   else
     return gen_code(e, cntxt, loc);
@@ -3055,7 +3079,7 @@ SEXP cmpfile(SEXP env, SEXP options, SEXP forms, SEXP nforms, SEXP cforms, SEXP 
 
     Loc loc = { false, e, sref };
 
-    if (!may_call_browser(e, cntxt))
+    if (!may_call_browser(e, cntxt, "mayCallBrowser(e, cntxt)"))
       SET_VECTOR_ELT(ret_cforms, i, gen_code(e, cntxt, loc));
     else
       SET_VECTOR_ELT(ret_cforms, i, VECTOR_ELT(cforms, i));
@@ -3281,7 +3305,7 @@ bool inline_function(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
   CompilerEnv *fenv = make_fun_env(formals, body, cntxt);
   CompilerContext *ncntxt = make_function_ctx(cntxt, fenv, formals, body);
 
-  if (may_call_browser(body, ncntxt)) {
+  if (may_call_browser(body, ncntxt, "mayCallBrowser(body, cntxt)")) {
     return false;
   }
 

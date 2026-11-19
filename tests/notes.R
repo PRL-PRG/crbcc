@@ -135,7 +135,8 @@ same_error(f)
 body(f) <- call("<-", c("a", "b"), 1)
 same_warnings(f)
 ## The conditions are the same as in GNU R, also their call.
-cond_of <- function(cmp, f) tryCatch(cmp(f), warning = identity, error = identity)
+cond_of <- function(cmp, f, options = NULL)
+  tryCatch(cmp(f, options = options), warning = identity, error = identity)
 stopifnot(identical(cond_of(compiler::cmpfun, f), cond_of(crbcc::cmpfun, f)))
 body(f) <- call("<-", character(0), 1)
 stopifnot(identical(cond_of(compiler::cmpfun, f), cond_of(crbcc::cmpfun, f)))
@@ -144,6 +145,18 @@ body(f) <- as.call(list(quote(expr = ), 1))
 same_error(f)
 body(f) <- call("<-", call("names", as.call(list(quote(expr = ), quote(x)))), 1)
 same_error(f)
+## The condition is the same as in GNU R, also its class and its call. The
+## call is the call of mayCallBrowser() at the place where GNU R stops.
+empty <- function(...) as.call(c(list(quote(expr = )), list(...)))
+for (level in 0:3) {
+  for (b in list(empty(1), call("g", empty(1)), call("function", NULL, empty(1)),
+                 call("<-", call("names", empty(quote(x))), 1))) {
+    body(f) <- b
+    options <- list(optimize = level)
+    stopifnot(identical(cond_of(compiler::cmpfun, f, options), cond_of(crbcc::cmpfun, f, options)))
+  }
+}
+stopifnot(identical(cond_of(compiler::compile, empty(1)), cond_of(crbcc::compile, empty(1))))
 
 ## A constant fold that gives an error or a warning. GNU R does not fold the
 ## call, and it writes nothing.
