@@ -17,7 +17,7 @@ dir.create(lib, recursive = TRUE)
 dir.create(src)
 .libPaths(lib)
 
-cran <- trimws(grep("^#", readLines(commandArgs(trailingOnly = TRUE)[1]), invert = TRUE, value = TRUE))
+cran <- trimws(readLines(commandArgs(trailingOnly = TRUE)[1]))
 cran <- cran[nzchar(cran)]
 ## Also the recommended packages, because the suite install uses their CRAN
 ## sources.

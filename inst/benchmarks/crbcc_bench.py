@@ -116,7 +116,7 @@ RECOMMENDED = [
 CRAN = [
     line.strip()
     for line in (HERE / "docker" / "cran50.txt").read_text().splitlines()
-    if line.strip() and not line.startswith("#")
+    if line.strip()
 ]
 
 

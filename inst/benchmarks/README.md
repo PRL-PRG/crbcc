@@ -33,6 +33,10 @@ In all suites, the script sets `OPENBLAS_NUM_THREADS=1` for each R process,
 because one OpenBLAS thread for each CPU adds CPU time that depends on the
 machine.
 
+The packages in `docker/cran50.txt` are the first 50 in the cranlogs download
+list for 2026-10-16 to 2026-11-14
+(https://cranlogs.r-pkg.org/top/last-month/100).
+
 Each install goes into an empty library. Thus all dependencies come from the
 image library, which GNU R compiled.
 
