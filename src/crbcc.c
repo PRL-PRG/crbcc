@@ -420,7 +420,7 @@ Folded constant_fold(SEXP e, CompilerContext *cntxt, Loc loc);
 
 // Inlining mechanism
 bool try_inline(SEXP e, CodeBuffer *cb, CompilerContext *cntxt);
-InlineInfo get_inline_info(const char *name, CompilerContext *cntxt, bool guard_ok);
+InlineInfo get_inline_info(SEXP sym, CompilerContext *cntxt, bool guard_ok);
 bool get_inline_handler(const char *name, Inline in, CompilerContext *cntxt, HandlerFn *found);
 
 #pragma endregion
@@ -1180,8 +1180,9 @@ bool any_dots(SEXP args) {
 }
 
 
-InlineInfo get_inline_info(const char *name, CompilerContext *cntxt, bool guard_ok) {
+InlineInfo get_inline_info(SEXP sym, CompilerContext *cntxt, bool guard_ok) {
 
+  const char *name = CHAR(PRINTNAME(sym));
   InlineInfo ret;
   ret.can_inline = false;
   ret.guard_needed = false;
@@ -1190,7 +1191,7 @@ InlineInfo get_inline_info(const char *name, CompilerContext *cntxt, bool guard_
   if (cntxt->options.optimize_level == 0 || strcmp(name, "standardGeneric") == 0)
     return ret;
 
-  VarInfo info = find_cenv_var(Rf_install(name), cntxt->env);
+  VarInfo info = find_cenv_var(sym, cntxt->env);
 
   if (!info.found || info.env == NULL)
     return ret;
@@ -1261,7 +1262,7 @@ bool try_inline(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
   const char *name = CHAR(PRINTNAME(CAR(e)));
 
-  InlineInfo info = get_inline_info(name, cntxt, true);
+  InlineInfo info = get_inline_info(CAR(e), cntxt, true);
 
   if (!info.can_inline) return false;
 
@@ -1477,7 +1478,7 @@ void cb_setcurexpr(CodeBuffer *cb, SEXP expr) {
 
 static bool is_base_var(SEXP sym, CompilerContext *cntxt) {
 
-  InlineInfo info = get_inline_info(CHAR(PRINTNAME(sym)), cntxt, false);
+  InlineInfo info = get_inline_info(sym, cntxt, false);
   return (info.can_inline && info.in == BASE);
 }
 
@@ -3915,7 +3916,7 @@ bool try_getter_inline(SEXP call, CodeBuffer *cb, CompilerContext *cntxt) {
     return false;
 
   const char *name = CHAR(PRINTNAME(fun_sym));
-  InlineInfo info = get_inline_info(name, cntxt, false);
+  InlineInfo info = get_inline_info(fun_sym, cntxt, false);
 
   if (!info.can_inline) {
     return false;
@@ -3939,7 +3940,7 @@ bool try_setter_inline(SEXP afun, SEXP place, SEXP origplace, SEXP call,
     return false;
 
   const char *name = CHAR(PRINTNAME(afun));
-  InlineInfo info = get_inline_info(name, cntxt, false);
+  InlineInfo info = get_inline_info(afun, cntxt, false);
 
   if (!info.can_inline) {
     return false;
