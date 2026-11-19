@@ -16,7 +16,7 @@ When possible, `crbcc` mirrors the architecture and logic used in the original G
 ## Features
 
 - The output is the same as the output of the GNU-R compiler.
-- It compiles the closures approximately 50x faster than the GNU-R compiler.
+- It compiles the closures faster than the GNU-R compiler - check the badge above!
 - Package installation is often dominated by the native code compilation (C/C++/Fortran)
   but even with that crbcc can save approximately 25% of the time.
 
