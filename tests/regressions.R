@@ -19,3 +19,19 @@ for (step in 2:10) {
   gctorture2(0)
   stopifnot(crbcc:::identical_strict(expected, code))
 }
+
+## The compile must force the same promises as GNU R. GNU R forces only the
+## value of a function that it examines, and not in a local frame.
+make <- function(cls) function(x) inherits(x, cls)
+forced <- FALSE
+code <- crbcc::cmpfun(make({ forced <- TRUE; "foo" }))
+stopifnot(!forced)
+delayedAssign("fun", { forced <- TRUE; identity })
+code <- crbcc::cmpfun(function(x) fun(x))
+stopifnot(forced)
+## A missing argument and an active binding in the closure environment.
+same((function(a) function() a)())
+f <- function() ab
+environment(f) <- new.env()
+makeActiveBinding("ab", function() stop("the compiler called the binding"), environment(f))
+same(f)

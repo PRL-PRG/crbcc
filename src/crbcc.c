@@ -292,7 +292,6 @@ typedef struct VarInfo {
 
   EnvFrame *defining_frame;        // The frame in which the variable is defined if local
   SEXP env;                        // The env in which the variable is defined if not local
-  SEXP value;                      // The variable itself
   bool found;
 
 } VarInfo;
@@ -1498,15 +1497,9 @@ SEXP find_fun_def(SEXP fun_sym, CompilerContext *cntxt) {
   CompilerEnv *cenv = cntxt->env;
   VarInfo var_info = find_cenv_var(fun_sym, cenv);
 
-  if (var_info.found) {
-    SEXP val = var_info.value;
-
-    if (TYPEOF(val) == PROMSXP) {
-
-      int err = 0;
-      val = R_tryEval(fun_sym, cenv->r_env, &err);
-      if (err) return R_NilValue;
-    }
+  if (var_info.found && var_info.defining_frame == NULL) {
+    // As get() in findFunDef() of GNU R, this forces a promise.
+    SEXP val = R_getVarEx(fun_sym, var_info.env, FALSE, R_UnboundValue);
 
     if (Rf_isFunction(val)) {
       return val;
@@ -1715,7 +1708,7 @@ bool find_loc_var(SEXP var, CompilerContext *cntxt) {
 
 VarInfo find_cenv_var(SEXP var, CompilerEnv *cenv) {
 
-  VarInfo info = { NULL, R_NilValue, R_NilValue, false };
+  VarInfo info = { NULL, R_NilValue, false };
   const char *var_name = CHAR(PRINTNAME(var));
   EnvFrame *current = cenv->top_frame;
 
@@ -1736,13 +1729,14 @@ VarInfo find_cenv_var(SEXP var, CompilerEnv *cenv) {
     current = current->parent;
   }
 
+  // Do not get the value here, as findCenvVar() of GNU R does not.
+  // R_getVarEx() can force a promise or call an active binding, thus it can
+  // run code of the user.
   SEXP env = cenv->r_env;
   while (env != R_NilValue && env != R_EmptyEnv) {
-    SEXP val = R_getVarEx(var, env, FALSE, R_UnboundValue);
-    if (val != R_UnboundValue) {
+    if (R_existsVarInFrame(env, var)) {
       info.defining_frame = NULL;
       info.env = env;
-      info.value = val;
       info.found = true;
       return info;
     }
