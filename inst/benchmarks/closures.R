@@ -1,5 +1,5 @@
 ## Compiles each closure of a package (`crbcc:::package_closures`) for the
-## suites check and closures of crbcc_bench.py. The compiler options are the
+## suites check and compile of crbcc_bench.py. The compiler options are the
 ## options of R CMD INSTALL, thus a compiler can write a note to stdout.
 ##
 ## Usage: Rscript closures.R check|gnur|crbcc <package>

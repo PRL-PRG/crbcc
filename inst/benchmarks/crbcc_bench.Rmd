@@ -7,9 +7,9 @@ output:
     df_print: kable
 params:
   ## The --csv reports of crbcc_bench.py. install has the suite install, from
-  ## the image build. closures has the suites check and closures, from the CI.
+  ## the image build. compile has the suites check and compile, from the CI.
   install: "install.csv"
-  closures: "closures.csv"
+  compile: "compile.csv"
   ## If this value is not empty, the report writes two files for the crbcc
   ## README to this directory: the figure install-time-top15.png and the
   ## shields.io badge speedup.json.
@@ -73,7 +73,7 @@ read_bench <- function(file) {
        data = mutate(data, run = as.integer(run), value = as.numeric(value)))
 }
 ins <- read_bench(params$install)
-clo <- read_bench(params$closures)
+clo <- read_bench(params$compile)
 
 ## A run with a failure still has its rows. The statistics do not use them.
 RUN <- c("suite", "benchmark", "compiler", "run")
@@ -122,7 +122,7 @@ less <- setNames(tot$less, tot$group)
 n_grp <- setNames(tot$packages, tot$group)
 el <- c(gnur = sum(pk$elapsed_gnur), crbcc = sum(pk$elapsed_crbcc))
 
-# Closures benchmark -------------------------------------------------------
+# Compile benchmark --------------------------------------------------------
 
 chk <- filter(clo$data, suite == "check")
 n_chk <- sum(chk$value[chk$metric == "closures"])
@@ -131,13 +131,14 @@ chk_failed <- failed_runs(chk)
 ## compile".
 n_bad <- sum(as.integer(regmatches(chk_failed$failure,
   regexpr("[0-9]+(?= closures differ)", chk_failed$failure, perl = TRUE))))
-cl_runs <- n_distinct(clo$data$run[clo$data$suite == "closures"])
+cl_runs <- n_distinct(clo$data$run[clo$data$suite == "compile"])
+n_cl_pkg <- n_distinct(clo$data$benchmark[clo$data$suite == "compile"])
 
 ## One row for each closure: the median compile time of each compiler, the
 ## size in AST nodes, and the size class (powers of 10). Only the closures
 ## with results of the two compilers.
 cl <- passed(clo$data) |>
-  filter(suite == "closures", metric == "compile") |>
+  filter(suite == "compile", metric == "compile") |>
   group_by(package = benchmark, closure, size = as.numeric(size), compiler) |>
   summarise(time = median(value), .groups = "drop") |>
   pivot_wider(names_from = compiler, values_from = time) |>
@@ -149,7 +150,7 @@ cl <- passed(clo$data) |>
 ## of a run is the sum of the compile times of its closures. Only the
 ## packages with results of the two compilers.
 cl_pk <- passed(clo$data) |>
-  filter(suite == "closures", metric == "compile") |>
+  filter(suite == "compile", metric == "compile") |>
   group_by(package = benchmark, compiler, run) |>
   summarise(time = sum(value), .groups = "drop") |>
   group_by(package, compiler) |>
@@ -205,10 +206,10 @@ benchmark with the times of the other.
   `r ins$meta$crbcc_version`): with crbcc, `R CMD INSTALL` of `r nrow(pk)`
   packages takes `r pct(less[["all"]])` less time than with GNU R
   (`r fmt(el[["crbcc"]])` s, not `r fmt(el[["gnur"]])` s).
-- **Compile time** ([closures benchmark](#closures-benchmark), commit
+- **Compile time** ([compile benchmark](#compile-benchmark), commit
   `r short(clo$meta$crbcc_commit)`): crbcc compiles `r fmt(nrow(cl), 0)`
   closures `r times(speedup)` faster than GNU R.
-- **Correctness** ([closures benchmark](#closures-results)):
+- **Correctness** ([compile benchmark](#compile-results)):
   `r correct_tldr`
 
 ## Install benchmark {#install-benchmark}
@@ -245,7 +246,7 @@ parses the code, makes the lazy-load database and the help pages, and loads
 the package to test it. The statistics do not use failed runs.
 
 The image build ran this benchmark with the crbcc of the image. Thus the
-results are for that crbcc, not for the commit of the closures benchmark.
+results are for that crbcc, not for the commit of the compile benchmark.
 
 ```{r install-env, results = "asis"}
 env_list(ins)
@@ -313,15 +314,16 @@ pk |>
             `bytecode crbcc (s)` = fmt(bytecode_crbcc, 3))
 ```
 
-## Closures benchmark {#closures-benchmark}
+## Compile benchmark {#compile-benchmark}
 
-### Methodology {#closures-methodology}
+### Methodology {#compile-methodology}
 
 The closures of a package are its namespace functions, its S4 methods and its
-R6 methods (`crbcc:::package_closures`). The benchmark uses
-`r n_distinct(clo$data$benchmark)` packages: the base packages without
-`datasets` and `tcltk`, and the recommended packages. The counts are
-closures, not compile events. Thus they do not compare with older reports.
+R6 methods (`crbcc:::package_closures`). The check uses `r n_chk_pkg`
+packages: the base packages without `datasets` and `tcltk`, and the packages
+of the install benchmark. The timed runs use only the `r n_cl_pkg` packages of
+the install benchmark. The counts are closures, not compile events. Thus they
+do not compare with older reports.
 
 First, the check compiles each closure one time with each compiler, and
 compares the byte code (`crbcc:::identical_strict`). A closure fails the
@@ -352,11 +354,11 @@ failed runs.
 
 The benchmark ran in the benchmark image, with the crbcc of the commit below.
 
-```{r closures-env, results = "asis"}
+```{r compile-env, results = "asis"}
 env_list(clo)
 ```
 
-### Results {#closures-results}
+### Results {#compile-results}
 
 `r correct`
 
@@ -365,8 +367,8 @@ chk_failed |>
   transmute(package = benchmark, failure = gsub("\\s+", " ", failure))
 ```
 
-```{r closures-failed}
-failed_table(filter(clo$data, suite == "closures"))
+```{r compile-failed}
+failed_table(filter(clo$data, suite == "compile"))
 ```
 
 GNU R compiles the `r fmt(nrow(cl), 0)` closures in `r fmt(cmp[["gnur"]], 2)`
@@ -422,7 +424,7 @@ ggplot(x, aes(size, speedup)) +
 The table gives the totals of each package. The package with the longest
 GNU R total is first.
 
-```{r closures-package}
+```{r compile-package}
 cl |>
   group_by(package) |>
   summarise(closures = n(), `median size` = median(size), largest = max(size),
