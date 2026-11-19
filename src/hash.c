@@ -12,7 +12,7 @@
 /*
  * Bounds to keep hashing fast
  */
-#define CP_HASH_NODES 64   // Maximum number of objects that cp_hash reads
+#define CP_HASH_NODES 16   // Maximum number of objects that cp_hash reads
 #define CP_HASH_ELTS 16    // Maximum number of elements of a vector that cp_hash reads
 
 /*
@@ -127,13 +127,16 @@ static unsigned int cp_hash_rec(SEXP x, int *budget) {
         h = cp_hash_combine(h, cp_hash_rec(VECTOR_ELT(x, i), budget));
       return h;
 
-    // Same walk as identical(): CAR and PRINTNAME(TAG) of each cell
+    // Same walk as identical(): CAR and PRINTNAME(TAG) of each cell. Most
+    // cells have no tag. The hash does not read an empty tag, thus the
+    // budget is sufficient for more CARs.
     case LANGSXP:
     case LISTSXP:
     case DOTSXP:
       for (SEXP c = x; c != R_NilValue && *budget > 0; c = CDR(c)) {
         h = cp_hash_combine(h, cp_hash_rec(CAR(c), budget));
-        h = cp_hash_combine(h, cp_hash_rec(PRINTNAME(TAG(c)), budget));
+        if (TAG(c) != R_NilValue)
+          h = cp_hash_combine(h, cp_hash_rec(PRINTNAME(TAG(c)), budget));
       }
       return h;
 
