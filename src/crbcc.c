@@ -1962,10 +1962,15 @@ static void find_locals1(SEXP e, NamesList shadowed, CompilerContext *cntxt, Nam
     // GNU R gives all the strings of a string target to assign(). assign()
     // warns in each pass of findLocalsList(). Thus do all the passes of GNU R.
     SEXP target = CADR(e);
-    if (TYPEOF(target) == STRSXP && XLENGTH(target) == 0)
-      Rf_error("invalid first argument");
-    if (TYPEOF(target) == STRSXP && XLENGTH(target) > 1) {
-      Rf_warning("only the first element is used as variable name");
+    if (TYPEOF(target) == STRSXP && XLENGTH(target) != 1) {
+      // The call of these conditions in GNU R is the call in addVar().
+      SEXP call = PROTECT(Rf_lang4(Rf_install("assign"), Rf_install("v"), Rf_ScalarReal(1),
+                                   Rf_install("vars")));
+      SET_TAG(CDR(CDDR(call)), Rf_install("envir"));
+      if (XLENGTH(target) == 0)
+        Rf_errorcall(call, "invalid first argument");
+      Rf_warningcall(call, "only the first element is used as variable name");
+      UNPROTECT(1); // call
       *uses_shadowed = true;
     }
     add_local(vars, get_assigned_var(e, cntxt));

@@ -127,6 +127,11 @@ body(f) <- call("<-", call("f", 1:30 + 0.5), 1)
 same_error(f)
 body(f) <- call("<-", c("a", "b"), 1)
 same_warnings(f)
+## The conditions are the same as in GNU R, also their call.
+cond_of <- function(cmp, f) tryCatch(cmp(f), warning = identity, error = identity)
+stopifnot(identical(cond_of(compiler::cmpfun, f), cond_of(crbcc::cmpfun, f)))
+body(f) <- call("<-", character(0), 1)
+stopifnot(identical(cond_of(compiler::cmpfun, f), cond_of(crbcc::cmpfun, f)))
 ## A call to the empty symbol.
 body(f) <- as.call(list(quote(expr = ), 1))
 same_error(f)
