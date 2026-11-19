@@ -935,6 +935,72 @@ static SEXP get_fold_fun(SEXP var, CompilerContext *cntxt) {
   return R_NilValue;
 }
 
+// data is { call, env }.
+static SEXP fold_eval(void *data) {
+  SEXP *ce = (SEXP *) data;
+  return Rf_eval(ce[0], ce[1]);
+}
+
+static SEXP fold_condition(SEXP cond, void *data) {
+  (void) cond;
+  *(bool *) data = true;
+  return R_NilValue;
+}
+
+// Returns true if the fold of the call cannot give a warning. Then the fold
+// does not need R_tryCatch(), which is slow. args are constants of the
+// modes of is_const_mode().
+static bool fold_gives_no_warning(const char *name, SEXP args, int n_args) {
+  const char *no_warning[] = { "c", "(", "baseenv", "emptyenv", "globalenv", NULL };
+  const char *arith[] = { "+", "-", "*", "/", "^", NULL };
+  const char *log_funs[] = { "sqrt", "log", "log2", "log10", NULL };
+
+  // An attribute can select a method, and a method can give a warning.
+  for (int i = 0; i < n_args; i++)
+    if (ANY_ATTRIB(VECTOR_ELT(args, i)))
+      return false;
+
+  if (is_in_c_set(name, no_warning))
+    return true;
+
+  // The other cases need numeric scalars: no recycling, and no coercion of a
+  // string.
+  bool integer_only = true;
+  bool complex = false;
+  for (int i = 0; i < n_args; i++) {
+    SEXP a = VECTOR_ELT(args, i);
+    int type = TYPEOF(a);
+    if (Rf_xlength(a) != 1 ||
+        (type != REALSXP && type != INTSXP && type != LGLSXP && type != CPLXSXP))
+      return false;
+    if (type == REALSXP || type == CPLXSXP)
+      integer_only = false;
+    if (type == CPLXSXP)
+      complex = true;
+  }
+
+  if (n_args == 1) {
+    if (strcmp(name, "-") == 0 || strcmp(name, "+") == 0 || strcmp(name, "exp") == 0)
+      return true;
+    // These functions give a warning only for a negative number.
+    if (!complex && is_in_c_set(name, log_funs)) {
+      double x = Rf_asReal(VECTOR_ELT(args, 0));
+      return ISNAN(x) || x >= 0;
+    }
+    return false;
+  }
+
+  if (n_args == 2) {
+    // `:` converts a complex number with a warning. In the arithmetic, a
+    // double or a complex number prevents an integer overflow.
+    if (strcmp(name, ":") == 0)
+      return !complex;
+    return !integer_only && is_in_c_set(name, arith);
+  }
+
+  return false;
+}
+
 static Folded constant_fold_call(SEXP e, CompilerContext *cntxt) {
 
   SEXP fun = CAR(e);
@@ -1010,10 +1076,30 @@ static Folded constant_fold_call(SEXP e, CompilerContext *cntxt) {
 
         SEXP new_call = PROTECT(LCONS(ffun, arglist));
 
-        int error = 0;
-        SEXP result = R_tryEval(new_call, cntxt->env->r_env, &error);
+        // As tryCatch(error =, warning =) in constantFoldCall() of GNU R: an
+        // error or a warning gives no fold and no output. Do not use
+        // R_tryEval(), which writes the error and does not stop a warning.
+        // R_tryCatch() is slow, thus use R_tryEvalSilent() if the call
+        // cannot give a warning.
+        bool failed = false;
+        SEXP result;
+        if (fold_gives_no_warning(CHAR(PRINTNAME(fun)), folded_values, n_args)) {
+          int error = 0;
+          result = R_tryEvalSilent(new_call, cntxt->env->r_env, &error);
+          failed = error;
+        } else {
+          static SEXP fold_conds = NULL;
+          if (fold_conds == NULL) {
+            fold_conds = Rf_allocVector(STRSXP, 2);
+            R_PreserveObject(fold_conds);
+            SET_STRING_ELT(fold_conds, 0, Rf_mkChar("error"));
+            SET_STRING_ELT(fold_conds, 1, Rf_mkChar("warning"));
+          }
+          SEXP data[2] = { new_call, cntxt->env->r_env };
+          result = R_tryCatch(fold_eval, data, fold_conds, fold_condition, &failed, NULL, NULL);
+        }
 
-        if (!error) {
+        if (!failed) {
           PROTECT(result);
           Folded out = check_const(result);
           UNPROTECT(6);  // ffun, result, new_call, arglist, folded_values, arg_tags
