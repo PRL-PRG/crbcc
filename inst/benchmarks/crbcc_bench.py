@@ -20,9 +20,11 @@ Suites:
   check     Compiles each closure of each package with the two compilers one
             time, and compares the byte code (closures.R). A run is a failure
             if a byte code is different or a compiler stops with an error.
-  compile   Compiles each closure of each package --runs times with each
-            compiler, and measures the compile time of each closure. Each run
-            compiles the closures in a different random order.
+  compile   Starts one R process for each package and compiler. The process
+            compiles each closure one time without a measurement (the warm-up
+            pass), then in --passes timed passes. It measures the compile
+            time of each closure in each timed pass. Each timed pass starts
+            with gc() and compiles the closures in a new random order.
 
 The suites install and compile use the 50 CRAN packages in docker/cran50.txt
 and the 15 recommended packages. The suite check uses the base packages in
@@ -45,6 +47,7 @@ it has one row for each value. The columns are: suite, benchmark (the
 package), run, compiler (gnur or crbcc, empty in the suite check), failure,
 iteration, warmup, metric, value, unit and lower_is_better. With the suite
 compile, there are also the columns closure and size, in a random order.
+iteration is the timed pass of a compile time, from 0.
 
   suite     metric    unit  value
   install   elapsed   s     the wall time of R CMD INSTALL
@@ -52,8 +55,9 @@ compile, there are also the columns closure and size, in a random order.
                             native code)
   install   bytecode  s     the time in compiler:::tryCmpfun
   check     closures        the number of closures
-  compile   compile   s     the compile time of one closure. closure is its
-                            name and size is crbcc:::function_size.
+  compile   compile   s     the compile time of one closure in one timed
+                            pass. closure is its name and size is
+                            crbcc:::function_size.
 
 Each run of the suites check and compile also has the metric elapsed, the
 wall time of the run. Thus the CSV has a row also for a failed run.
@@ -123,7 +127,11 @@ CRAN = [
 class Params(SharedBenchParams):
     runs: int = field(
         default=3,
-        metadata={"help": "The runs of each package and compiler in the suites install and compile."},
+        metadata={"help": "The runs of each package and compiler in the suite install."},
+    )
+    passes: int = field(
+        default=3,
+        metadata={"help": "The timed passes of each closure in the suite compile. The passes run in one R process."},
     )
     installed: bool = field(
         default=False,
@@ -202,16 +210,19 @@ class Total(Metric):
 
 
 class ClosureMetric(Metric):
-    """Reads the lines "RBC closure<TAB><s><TAB><size><TAB><name>" of
-    closures.R. Each line gives one sample."""
+    """Reads the lines "RBC closure<TAB><pass><TAB><s><TAB><size><TAB><name>"
+    of closures.R. Each line gives one sample. The iteration of the sample is
+    the pass, from 0."""
 
     def __init__(self) -> None:
         super().__init__("compile", "s", "lower better")
-        self.regex = re.compile(r"^RBC closure\t([^\t\n]+)\t([^\t\n]+)\t(.*)$", re.MULTILINE)
+        self.regex = re.compile(r"^RBC closure\t([0-9]+)\t([^\t\n]+)\t([^\t\n]+)\t(.*)$", re.MULTILINE)
 
     def process(self, data: InvocationResult) -> Iterable[Sample]:
-        for time, size, name in self.regex.findall(data.stdout or ""):
-            yield self.get_sample(float(time), extra={"closure": name, "size": int(size)})
+        for pass_, time, size, name in self.regex.findall(data.stdout or ""):
+            yield self.get_sample(
+                float(time), iteration=int(pass_) - 1, extra={"closure": name, "size": int(size)}
+            )
 
 
 def success(result: InvocationResult) -> str | None:
@@ -241,8 +252,8 @@ def empty_target(b: Benchmark) -> None:
     PKG_INSTALL.mkdir()
 
 
-def closures_r(mode: str, package: str) -> list[str]:
-    return ["Rscript", "--vanilla", str(HERE / "closures.R"), mode, package]
+def closures_r(mode: str, package: str, *args: str) -> list[str]:
+    return ["Rscript", "--vanilla", str(HERE / "closures.R"), mode, package, *args]
 
 
 def suites(params: Params):
@@ -274,9 +285,8 @@ def suites(params: Params):
         .with_metric(Time(), RegexMetric("closures", r"^RBC closures: (\d+)$", stdout_metric_source)),
         package_suite("compile", CRAN + RECOMMENDED)
         .with_matrix(compiler=COMPILERS)
-        .with_command(lambda ctx: closures_r(ctx.data.compiler, ctx.benchmark))
-        .with_metric(Time(), ClosureMetric())
-        .with_runs(lambda ctx: FixedRuns(ctx.params.runs)),
+        .with_command(lambda ctx: closures_r(ctx.data.compiler, ctx.benchmark, str(ctx.params.passes)))
+        .with_metric(Time(), ClosureMetric()),
     ]
 
 

@@ -160,7 +160,7 @@ chk_failed <- failed_runs(chk)
 ## compile".
 n_bad <- sum(as.integer(regmatches(chk_failed$failure,
   regexpr("[0-9]+(?= closures differ)", chk_failed$failure, perl = TRUE))))
-cl_runs <- n_distinct(clo$data$run[clo$data$suite == "compile"])
+cl_passes <- n_distinct(clo$data$iteration[clo$data$suite == "compile" & clo$data$metric == "compile"])
 n_cl_pkg <- n_distinct(clo$data$benchmark[clo$data$suite == "compile"])
 
 ## One row for each closure: the median compile time of each compiler, the
@@ -177,12 +177,12 @@ cl <- cl |>
   mutate(class = cut(size, c(1, 10, 100, 1e3, 1e4, Inf),
                      c("1-9", "10-99", "100-999", "1,000-9,999", ">= 10,000"), right = FALSE))
 
-## One row for each package: the median run time of each compiler. The time
-## of a run is the sum of the compile times of its closures. Only the
-## packages with results of the two compilers.
+## One row for each package: the median pass time of each compiler. The
+## time of a pass (the column iteration) is the sum of the compile times of
+## its closures. Only the packages with results of the two compilers.
 cl_pk <- passed(clo$data) |>
   filter(suite == "compile", metric == "compile") |>
-  group_by(package = benchmark, compiler, run) |>
+  group_by(package = benchmark, compiler, iteration) |>
   summarise(time = sum(value), .groups = "drop") |>
   group_by(package, compiler) |>
   summarise(time = median(time), .groups = "drop") |>
@@ -245,7 +245,8 @@ benchmark with the times of the other.
 - **Compile time** ([compile benchmark](#compile-benchmark), commit
   `r commit_link(clo$meta$crbcc_commit)`): crbcc compiles closures
   `r times(speedup)` faster than GNU R. This value is the geometric mean of
-  the speedups of `r fmt(nrow(cl), 0)` closures of `r n_cl_pkg` packages.
+  the speedups of `r fmt(nrow(cl), 0)` closures of `r n_cl_pkg` packages,
+  with [warm times](#compile-methodology).
 - **Correctness** ([compile benchmark](#compile-results)):
   `r correct_tldr`
 
@@ -390,29 +391,37 @@ sortable(ins_tab,
 The closures of a package are its namespace functions, its S4 methods and its
 R6 methods (`crbcc:::package_closures`). The check uses `r n_chk_pkg`
 packages: the base packages without `datasets` and `tcltk`, and the packages
-of the install benchmark. The timed runs use only the `r n_cl_pkg` packages of
+of the install benchmark. The timed passes use only the `r n_cl_pkg` packages of
 the install benchmark. The counts are closures, not compile events. Thus they
 do not compare with older reports.
 
 First, the check compiles each closure one time with each compiler, and
 compares the byte code (`crbcc:::identical_strict`). A closure fails the
-check if the byte code differs or a compiler stops with an error. Then each
-compiler compiles each closure in `r cl_runs` runs, and the benchmark
-measures the time of each `cmpfun()` call. Before these calls, each run
-compiles its first closure one time without a measurement, because the first
-compile loads code of the compiler. As in `R CMD INSTALL`, the R JIT is off.
-A run is one R process for one package and one compiler. The benchmark sets
-`OPENBLAS_NUM_THREADS=1` for each R process, because one OpenBLAS thread for
-each CPU adds CPU time that depends on the machine. For each package, the
-GNU R runs come first, then the crbcc runs. Each run compiles the closures in a
-different random order.
+check if the byte code differs or a compiler stops with an error.
 
-The time of a run is the sum of the compile times of its closures. The value
-of a package is the median of its run times. A total is the sum of the package
-values. The value of a closure is the median of its runs. A total includes the
-garbage collections and the lazy loads of a run. The closure values do not
-include them, because the random order moves them to a different closure in
-each run.
+Then one R process for each package and compiler measures the compile times.
+For each package, the GNU R process comes first, then the crbcc process. As in
+`R CMD INSTALL`, the R JIT is off. The benchmark sets
+`OPENBLAS_NUM_THREADS=1` for each R process, because one OpenBLAS thread for
+each CPU adds CPU time that depends on the machine. Each process does these
+steps:
+
+1. A warm-up pass compiles each closure one time without a measurement.
+2. `r cl_passes` timed passes compile each closure one time, and the
+   benchmark measures the time of each `cmpfun()` call. Each timed pass
+   starts with `gc()` and compiles the closures in a new random order.
+
+Thus the times are warm: the same process compiled each closure one time
+before the timed passes. The times do not include the first compile of a
+closure, which can load code of the compiler and force lazy-load promises.
+For the compile time in real installs, refer to the bytecode metric of the
+[install benchmark](#install-results).
+
+The value of a closure is the median of its passes. Because of the random
+order, a garbage collection occurs in a different closure in each pass, and
+the median removes its time. The time of a pass is the sum of its closure
+times, with its garbage collections. The value of a package is the median of
+its pass times. A total is the sum of the package values.
 
 The speedup of a closure is its GNU R time divided by its crbcc time. The
 compile speedup in the TL;DR and in the README badge is the geometric mean of
@@ -425,10 +434,11 @@ only one compiler, the statistics do not use it. In this report,
 only one compiler.
 
 For a group of closures, for example a package, the speedup is the geometric
-mean of the closure speedups. The size of a closure is the number of AST nodes in its body and in the default
-values of its formals (`crbcc:::function_size`). The statistics do not use
-failed runs. In the table of the packages, diff and ratio compare the
-totals, as in the install benchmark.
+mean of the closure speedups. The size of a closure is the number of AST
+nodes in its body and in the default values of its formals
+(`crbcc:::function_size`). The statistics do not use failed runs. In the
+table of the packages, diff and ratio compare the totals, as in the install
+benchmark.
 
 The benchmark ran in the benchmark image, with the crbcc of the commit below.
 
@@ -449,7 +459,7 @@ chk_failed |>
 failed_table(filter(clo$data, suite == "compile"))
 ```
 
-The timed runs compiled `r fmt(nrow(cl), 0)` closures of `r n_cl_pkg`
+The timed passes compiled `r fmt(nrow(cl), 0)` closures of `r n_cl_pkg`
 packages. The compile speedup, the geometric mean of the closure speedups, is
 `r times(speedup)`. GNU R compiles the closures in `r fmt(cmp[["gnur"]], 2)` s,
 and crbcc in `r fmt(cmp[["crbcc"]], 2)` s. Thus the ratio of the totals is
