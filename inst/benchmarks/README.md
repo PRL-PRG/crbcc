@@ -1,177 +1,169 @@
 # crbcc benchmarks
 
-The benchmarks have two goals:
+The benchmarks compare crbcc with the GNU R byte-code compiler:
 
-- **Correctness**: the crbcc byte code of each closure must be the same as
-  the GNU R byte code.
-- **Performance**: compare the compile time of crbcc with the compile time
-  of the GNU R compiler.
+- **Install benchmark**: the time of `R CMD INSTALL` with each compiler.
+- **Closure check**: crbcc must give the same byte code as GNU R for each
+  closure.
+- **Closures benchmark**: the compile time of each closure with each
+  compiler.
 
-The benchmarks use a real workload: `R CMD INSTALL` of R packages. During
-the installation, R compiles all closures of the package, also the S4
-methods. The CI runs the benchmarks for each push and pull request. The
-[benchmark report](https://prl-prg.github.io/crbcc/) shows the results of
+The [benchmark report](https://prl-prg.github.io/crbcc/) shows the results of
 the last push to `main`.
 
 ## Files
 
-| File                      | Contents                                                                                                                  |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `crbcc_bench.py`          | The benchmark script. It uses [bench](https://github.com/PRL-PRG/bench), which runs the suites and writes the CSV report. |
-| `crbcc_bench.Rmd`         | The benchmark report. The CI puts it on <https://prl-prg.github.io/crbcc/>.                                               |
-| `docker/`                 | The Docker image `ghcr.io/prl-prg/crbcc-benchmarks`.                                                                      |
-| `../r-cmd-install-hook.R` | The hook that compiles and measures each closure during `R CMD INSTALL`.                                                  |
+| File                      | Contents                                                                                                                                                       |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crbcc_bench.py`          | The benchmark tool, with the suites `install`, `check` and `closures`. It uses [bench](https://github.com/PRL-PRG/bench). The docstring gives the CSV columns. |
+| `closures.R`              | Compiles each closure of a package for the suites `check` and `closures`.                                                                                      |
+| `timing-profile.R`        | Measures the native and bytecode times in the suite `install`.                                                                                                 |
+| `crbcc_bench.Rmd`         | The benchmark report.                                                                                                                                          |
+| `docker/`                 | The benchmark image. `cran50.txt` has the 50 CRAN packages with the most downloads.                                                                            |
+| `../r-cmd-install-hook.R` | The hook that the crbcc runs of the suite `install` use.                                                                                                       |
 
-## What the benchmarks measure
+## Install benchmark
 
-Each benchmark is one `R CMD INSTALL` of one package. The hook
-`inst/r-cmd-install-hook.R` is the `R_PROFILE_USER` file of the
-installation. It replaces `compiler:::tryCmpfun`, which R uses to compile
-each closure. The replacement compiles the closure with GNU R (`gnur`) or
-with crbcc (`crbcc`), and measures the compile time. The comments in the
-hook give its modes (`CRBCC_MODE`).
+The suite `install` installs the 50 CRAN packages of `docker/cran50.txt` and
+the 15 recommended packages. Each install is `R CMD INSTALL` of the CRAN
+source tarball. It runs `configure` and compiles the native code with
+`MAKEFLAGS=-j8`. For each package, 3 runs with GNU R come first, then 3 runs
+with crbcc. The installs run one at a time. The crbcc runs read the hook.
+In all suites, the script sets `OPENBLAS_NUM_THREADS=1` for each R process,
+because one OpenBLAS thread for each CPU adds CPU time that depends on the
+machine.
 
-The metrics:
+The packages in `docker/cran50.txt` are the first 50 in the cranlogs download
+list for 2026-10-16 to 2026-11-14
+(https://cranlogs.r-pkg.org/top/last-month/100).
+
+Each install goes into an empty library. Thus all dependencies come from the
+image library, which GNU R compiled.
+
+`timing-profile.R` is the `R_PROFILE_USER` file of each install. It only
+reads the clock. Each run gives three numbers:
 
 - **elapsed**: the wall time of `R CMD INSTALL`.
-- **bytecode**: the time in the byte-code compiler, for all closures.
-- **native**: the time to compile and link the C, C++ and Fortran code.
-- **time**: the compile time of one closure.
+- **native**: the time in `tools:::.shlib_internal`, which compiles the C,
+  C++ and Fortran code.
+- **bytecode**: the time in `compiler:::tryCmpfun`, which compiles each
+  closure to byte code.
 
-`crbcc_bench.py` has two suites:
+This suite runs only in the image build, because it uses the CRAN sources in
+the image. The results are in `$CRBCC_BENCHMARKS/install.csv` of the image.
 
-- **install**: installs each package `--runs` times with each compiler, and
-  measures the time. This suite does not compare the byte code, because
-  this work adds time.
-- **check**: only in the Docker image. Installs each package one time with
-  crbcc, and compares the byte code of each closure with the GNU R byte code
-  in the image. If a byte code is different, the run is a failure. The
-  installations can be parallel (`-j`), because this suite does not measure
-  the time.
+## Closure check and closures benchmark
 
-The package sets (`--packages`, you can use the option more than one time):
+`closures.R` gets the closures of a package with `crbcc:::package_closures`:
+the namespace functions, the S4 methods and the R6 methods that the package
+defines.
 
-| Set           | Packages                                                                       |
-| ------------- | ------------------------------------------------------------------------------ |
-| `small`       | MASS, Matrix, lattice, mgcv and survival (the default)                         |
-| `recommended` | the 15 recommended packages                                                    |
-| `cran100`     | the 100 CRAN packages with the most downloads (`docker/cran100.txt`)           |
-| `top50`       | the first 50 packages of cran100                                               |
-| `all`         | only in the Docker image: all 158 packages of the image, also the dependencies |
+- The suite `check` compiles each closure one time with each compiler, and
+  compares the byte code (`crbcc:::identical_strict`). If a byte code
+  differs or a compiler stops with an error, the run fails. If a package has
+  no closures, the run also fails.
+- The suite `closures` compiles each closure in 3 runs with each compiler. It
+  records the compile time and the size of each closure. Each run compiles
+  the closures in a different random order. Thus a garbage collection or a
+  lazy load occurs in a different closure in each run, and the median of the
+  runs removes its time.
 
-## The Docker image
+The two suites use the base packages without `datasets` and `tcltk`, and the
+recommended packages. With `--installed`, they also use all other installed
+packages.
 
-The compilation of the native code (C, C++ and Fortran) takes a large part
-of the installation time, for example 41% for the 65 benchmark packages. This
-time is the same for the two compilers. Thus the image keeps the compiled
-native code, and the benchmarks do not compile it again. The image also
-gives the same environment to the CI and to a local run.
+## The image
 
 The image `ghcr.io/prl-prg/crbcc-benchmarks` has R 4.6.2, the system
-libraries, uv, pandoc, and 158 packages: cran100, the recommended packages
-and their dependencies. The packages come from a CRAN snapshot (Posit
-Package Manager, 2026-11-12). `docker/build-packages.R` makes the image
-content in `/opt/crbcc-benchmarks`:
+libraries, uv, pandoc, the benchmark packages with their dependencies, crbcc
+and the install benchmark results. The packages come from a CRAN snapshot
+(Posit Package Manager, 2026-11-12). The image is for linux/amd64.
 
-1. It installs each package from the source with GNU R. Packages in the
-   same dependency level (top-sorted) install in parallel. After the installation, the
-   script keeps the source tree of the package, with the compiled code and
-   the output of `configure`, as `prebuilt/<package>.tar.gz`. `lib/` has the
-   installed packages.
-2. It installs each package one more time from its tarball, with the hook.
-   The hook writes the GNU R byte code of each closure to
-   `bytecode/<package>.rds`. The first installation cannot write the byte
-   code, because the R JIT compiles different closures when R installs from
-   the source.
+The tag is `<crbcc version>-<revision>`, for example `0.2.0-1`. The CI uses
+the tag in the `Makefile` (`IMAGE_TAG`). For each new crbcc version, set a
+new tag, then build and push a new image. If only the image changes,
+increase the revision.
 
-With `--prebuilt /opt/crbcc-benchmarks`, `crbcc_bench.py` installs
-`prebuilt/<package>.tar.gz` with `R CMD INSTALL --no-configure`. The hook
-copies the shared object of the package from `lib/`, thus `make` does not
-run. Thus the elapsed time is the time of the R part of the installation.
+The build:
 
-The image tag is a hash of `docker/` and of the hook. If you change these
-files, build and push a new image, because the CI uses the tag of its
-commit. Use these targets of the top-level `Makefile`:
+1. Installs the packages with GNU R and keeps the CRAN sources
+   (`docker/build-packages.R`).
+2. Installs crbcc from the build context.
+3. Runs the install benchmark.
+4. Runs the closure check for all installed packages
+   (`make test-compile-all-packages`). If a byte code differs, the build
+   fails.
+
+The build takes a long time, because it installs each benchmark package six
+times. Commit your changes before the build, because the image records the
+commit. Run these commands in the crbcc source directory:
 
 ```bash
-make image-tag    # show the tag
-make image        # build the image (commit the changes first)
+make image        # build the image
 make image-push   # push the image (docker login ghcr.io first)
 ```
 
+Without git, give the commit: `make image CRBCC_COMMIT=<commit>`.
+
 ## CI
 
-The workflow `.github/workflows/ci.yml` has these jobs in the image:
+The workflow `.github/workflows/ci.yml` has these benchmark jobs:
 
-- **check**: `make test-compile-all-packages`, the suite check for all 158
-  packages.
-- **benchmark**: the suite install for the packages top50 and recommended,
-  3 runs with each compiler. The two compilers run on the same runner,
-  because the report divides their times.
-- **report**: makes the report from `check.csv` and `results.csv`. For a
-  push to `main`, the job `pages` puts the report on GitHub Pages.
+- **closures**: runs the suites `check` and `closures` in the image, with the
+  crbcc of the pull request. If a byte code differs, the job fails.
+- **report**: renders the report from `install.csv` of the image and
+  `closures.csv`. Thus the install results are for the crbcc of the image,
+  not for the pull request.
+- **pages**: for a push to `main`, puts the report on GitHub Pages.
+  `README.md` shows its figure and its badge.
 
-## Run the benchmarks
+## Run in the image
 
-### In the Docker image
-
-Run these commands in the crbcc source directory. `make -s image-tag` gives
-the image of the current commit.
+Start a container in the crbcc source directory:
 
 ```bash
 docker run --rm -it -v "$PWD":/crbcc -w /crbcc \
   ghcr.io/prl-prg/crbcc-benchmarks:$(make -s image-tag) bash
 ```
 
-In the container, run the check. The results are in `bench/check.csv`, and
-`bench/pkg-lib` has crbcc:
+To run the closure check for all installed packages, use this command. The
+results are in `bench/check.csv`.
 
 ```bash
 make test-compile-all-packages
 ```
 
-Then run the suite install in `bench/`, and make the report:
+To run the closures benchmark as the CI does, use these commands:
 
 ```bash
-cd bench
-uv run --script ../inst/benchmarks/crbcc_bench.py --r "$(command -v R)" \
-  --prebuilt "$CRBCC_BENCHMARKS" --include '^install/' \
-  --packages top50 --packages recommended --csv results.csv
+mkdir -p bench/pkg-lib && cd bench
+R CMD build --no-build-vignettes ..
+R CMD INSTALL --library=pkg-lib crbcc_*.tar.gz
+uv run --script ../inst/benchmarks/crbcc_bench.py \
+  --include '^check/' --include '^closures/' --csv closures.csv
+```
+
+To render the report to `bench/site/index.html`, use these commands in
+`bench/`:
+
+```bash
+cp "$CRBCC_BENCHMARKS/install.csv" .
 Rscript -e 'rmarkdown::render("../inst/benchmarks/crbcc_bench.Rmd",
-  output_dir = ".", knit_root_dir = getwd(),
-  params = list(csv = "check.csv,results.csv"))'
+  output_dir = "site", output_file = "index.html", knit_root_dir = getwd(),
+  params = list(install = "install.csv", closures = "closures.csv", assets = "site"))'
+cp install.csv closures.csv site/
 ```
 
-### Without the Docker image
+### Options of `crbcc_bench.py`
 
-Run these commands in a work directory that has the crbcc source in
-`crbcc/` and an R build in `R-4.6.2/`:
+| Option                               | Use                                                                                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `--include REGEX`, `--exclude REGEX` | Select the benchmarks, for example `--include '^check/'`.                                                |
+| `--runs N`                           | The runs of each package and compiler in the suites `install` and `closures`. The default is 3.          |
+| `--installed`                        | The suites `check` and `closures` also use all other installed packages.                                 |
+| `--commit SHA`                       | The crbcc commit for the CSV header.                                                                     |
+| `-j N`                               | Run N benchmarks in parallel. Use it only for the suite `check`, because parallel runs change the times. |
+| `--csv FILE`                         | Write the CSV report.                                                                                    |
+| `--list`                             | Show the benchmarks, and do not run them.                                                                |
 
-```bash
-mkdir -p pkg-lib
-R-4.6.2/bin/R CMD INSTALL --library=pkg-lib crbcc
-crbcc/inst/benchmarks/crbcc_bench.py --r R-4.6.2/bin/R --csv results.csv
-```
-
-If R does not have the recommended packages, the script installs them from
-`src/library/Recommended`. Thus R must then be a build in the R source tree.
-The script downloads the other package sources from the CRAN snapshot. The
-installations compile the native code. Without the image, there is no suite
-check, thus the report cannot use these results.
-
-### Options
-
-| Option                               | Use                                                                                                    |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `--r PATH`                           | The R executable.                                                                                      |
-| `--packages SET`                     | The package set (see above).                                                                           |
-| `--compilers gnur\|crbcc`            | The compilers of the suite install. The default is the two compilers.                                  |
-| `--runs N`                           | The runs of each package in the suite install. The default is 3.                                       |
-| `--prebuilt PATH`                    | The image content, `/opt/crbcc-benchmarks`. With this option, the script also runs the suite check.    |
-| `--include REGEX`, `--exclude REGEX` | Select the benchmarks, for example `--include '^check/'`.                                              |
-| `-j N`                               | Run N benchmarks in parallel. Use it only for the suite check, because parallel runs change the times. |
-| `--csv FILE`, `--json FILE`          | Write the report. `crbcc_bench.Rmd` reads the CSV.                                                     |
-| `--list`, `--dry`                    | Show the benchmarks, and do not run them.                                                              |
-
-For all options, use `--help`. The docstring of `crbcc_bench.py` gives the
-CSV columns.
+For all options, use `--help`.
