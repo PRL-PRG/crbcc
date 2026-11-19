@@ -1688,10 +1688,13 @@ VarInfo find_cenv_var(SEXP var, CompilerEnv *cenv) {
   const char *var_name = CHAR(PRINTNAME(var));
   EnvFrame *current = cenv->top_frame;
 
+  // add_local() and extract_names() put only the PRINTNAME of a symbol in a
+  // frame. Two symbols do not have the same PRINTNAME. Thus a comparison of
+  // the pointers is sufficient.
   while (current != NULL) {
     if (current->extra_vars.count != 0) {
       for (int i = 0; i < current->extra_vars.count; i++) {
-        if (strcmp(var_name, current->extra_vars.vars[i]) == 0) {
+        if (var_name == current->extra_vars.vars[i]) {
           info.defining_frame = current;
           info.env = R_NilValue;
           info.found = true;
