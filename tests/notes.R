@@ -84,6 +84,13 @@ same(f)
 ## A bad assignment. This test examines only the output.
 body(f) <- call("<-", quote(g(1)), quote(message("EVALUATED")))
 stopifnot(length(run(crbcc::cmpfun, f, NULL)$out) == 0)
+## A byte code literal that the compiler folds. GNU R stops in constantFold().
+for (level in 0:3) {
+  for (b in list(call("{", quote(x), bc), call("<-", quote(x), bc), call("-", bc))) {
+    body(f) <- b
+    same(f, list(optimize = level, suppressAll = FALSE))
+  }
+}
 
 ## The warnings of the compile must be the same as in GNU R, for each
 ## optimize level.

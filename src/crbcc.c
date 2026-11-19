@@ -1035,7 +1035,7 @@ static Folded constant_fold_call(SEXP e, CompilerContext *cntxt) {
           break;
         }
 
-        Loc null_loc = { 0 };
+        Loc null_loc = { true, R_NilValue, R_NilValue };
         Folded ce = constant_fold(a, cntxt, null_loc);
 
         if (ce.folded) {
@@ -1144,9 +1144,11 @@ Folded constant_fold(SEXP e, CompilerContext *cntxt, Loc loc) {
       return constant_fold_sym(e, cntxt);
 
     case PROMSXP:
+      cntxt_stop("cannot constant fold literal promises", cntxt, loc);
       return (Folded) { false, R_NilValue };
 
     case BCODESXP:
+      cntxt_stop("cannot constant fold literal bytecode objects", cntxt, loc);
       return (Folded) { false, R_NilValue };
 
     default:
