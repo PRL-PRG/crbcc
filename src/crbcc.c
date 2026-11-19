@@ -4831,8 +4831,11 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def) {
 
     SEXP matched_call = PROTECT(matched_call_raw);
 
+    // Each CONS() can start the GC. Keep the list protected until the end.
     SEXP args_head = R_NilValue;
     SEXP args_tail = R_NilValue;
+    PROTECT_INDEX args_pi;
+    PROTECT_WITH_INDEX(args_head, &args_pi);
 
     SEQ_ALONG(node, CDR(icall)) {
       SEXP n = CAR(node);
@@ -4859,17 +4862,15 @@ SEXP inline_simple_internal_call(SEXP e, SEXP def) {
         }
       }
 
-      SEXP new_node = PROTECT(CONS(subst_val, R_NilValue));
+      SEXP new_node = CONS(subst_val, R_NilValue);
       if (args_head == R_NilValue) {
         args_head = new_node;
+        REPROTECT(args_head, args_pi);
       } else {
         SETCDR(args_tail, new_node);
       }
       args_tail = new_node;
-      UNPROTECT(1); // new_node
     }
-
-    PROTECT(args_head);
 
     SEXP inner_call = PROTECT(Rf_lcons(CAR(icall), args_head));
     SEXP dot_internal_sym = Rf_install(".Internal");
