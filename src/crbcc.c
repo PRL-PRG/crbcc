@@ -1805,8 +1805,14 @@ VarInfo find_cenv_var(SEXP var, CompilerEnv *cenv) {
     if (current->extra_vars.count != 0) {
       for (int i = 0; i < current->extra_vars.count; i++) {
         if (var_name == current->extra_vars.vars[i]) {
-          info.defining_frame = current;
-          info.env = R_NilValue;
+          // As in GNU R, the bottom frame is the frame of r_env, for the
+          // variables of the top level code of compile() and cmpfile().
+          if (current->parent == NULL) {
+            info.env = cenv->r_env;
+          } else {
+            info.defining_frame = current;
+            info.env = R_NilValue;
+          }
           info.found = true;
           return info;
         }

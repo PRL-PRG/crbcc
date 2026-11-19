@@ -9,3 +9,10 @@ writeLines(c(
 output <- function(cmpfile) capture.output(cmpfile(src, dst, verbose = TRUE))
 expected <- output(compiler::cmpfile)
 stopifnot(length(expected) == 4, identical(output(crbcc::cmpfile), expected))
+
+## The variables of the file have the frame type of env, as in GNU R. Thus
+## the note for zzz() is the same.
+writeLines(c("zzz <- function(a) NULL", "zzz(1, 2)"), src)
+notes <- function(cmpfile) capture.output(cmpfile(src, dst, options = list(suppressAll = FALSE)))
+expected <- notes(compiler::cmpfile)
+stopifnot(length(expected) == 2, identical(notes(crbcc::cmpfile), expected))
