@@ -35,3 +35,13 @@ f <- function() ab
 environment(f) <- new.env()
 makeActiveBinding("ab", function() stop("the compiler called the binding"), environment(f))
 same(f)
+
+## The value of an active binding has no other reference. The GC must not
+## free it while the compiler examines the call.
+makeActiveBinding("ab", function() function(a) NULL, environment())
+f <- function() ab(1, 2)
+expected <- capture.output(invisible(compiler::cmpfun(f, opts)))
+gctorture2(10)
+out <- capture.output(invisible(crbcc::cmpfun(f, opts)))
+gctorture2(0)
+stopifnot(identical(out, expected))

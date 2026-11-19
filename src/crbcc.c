@@ -2466,7 +2466,8 @@ void cmp_call(SEXP call, CodeBuffer *cb, CompilerContext *cntxt, bool inline_ok)
         notify_local_fun(fun, cntxt, cb_savecurloc(cb));
       } else {
 
-        SEXP def = find_fun_def(fun, cntxt);
+        // The value of an active binding has no other reference.
+        SEXP def = PROTECT(find_fun_def(fun, cntxt));
         if (def == R_NilValue) {
           notify_undef_fun(fun, cntxt, cb_savecurloc(cb));
         } else {
@@ -2474,6 +2475,7 @@ void cmp_call(SEXP call, CodeBuffer *cb, CompilerContext *cntxt, bool inline_ok)
           check_call(def, call, &emsg);
           if (emsg) notify_bad_call(emsg, cntxt, cb_savecurloc(cb));
         }
+        UNPROTECT(1); // def
       }
 
       cmp_call_sym_fun(fun, args, call, cb, cntxt);
@@ -5113,20 +5115,23 @@ bool cmp_simple_internal(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
     return false;
 
   SEXP fun_sym = CAR(e);
-  SEXP def = find_fun_def(fun_sym, cntxt);
+  // The value of an active binding has no other reference.
+  SEXP def = PROTECT(find_fun_def(fun_sym, cntxt));
 
   // GNU R gives no signal function to checkCall here, thus no note.
-  if (!check_call(def, e, NULL))
+  if (!check_call(def, e, NULL)) {
+    UNPROTECT(1); // def
     return false;
+  }
 
   SEXP call = PROTECT(inline_simple_internal_call(e, def));
 
   if (call == R_NilValue) {
-    UNPROTECT(1); //call
+    UNPROTECT(2); // def, call
     return false;
   } else {
     bool res = cmp_dot_internal_call(call, cb, cntxt);
-    UNPROTECT(1); //call
+    UNPROTECT(2); // def, call
     return res;
   }
 }
