@@ -3013,7 +3013,9 @@ static SEXP R_bcVersion() {
 
 SEXP compile(SEXP e, SEXP env, SEXP options, SEXP srcref) {
 
-  Loc loc = { false, e, srcref };
+  // As compile() of GNU R: without srcref, the code buffer gets the srcref
+  // of e.
+  Loc loc = { srcref == R_NilValue, e, srcref };
   CompilerEnv *cenv = make_cenv(env);
   CompilerContext *cntxt = make_toplevel_ctx(cenv, options);
 

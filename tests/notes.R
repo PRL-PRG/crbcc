@@ -174,6 +174,10 @@ same_compile <- function(e) {
 same_compile(quote({ zzz <- function(a) NULL; zzz(1, 2) }))
 g <- function(a) NULL
 same_compile(quote({ g <- function(a) NULL; g(1, 2) }))
+## Without srcref, compile() takes the source references of the code. Then
+## the note has the location.
+same_compile(eval(parse(text = "quote({\n  zzz <- function(a) NULL\n  zzz(1, 2)\n})",
+                        keep.source = TRUE)[[1]]))
 
 ## The arguments of cmpfun are the same as in GNU R.
 stopifnot(identical(formals(crbcc::cmpfun), formals(compiler::cmpfun)))
