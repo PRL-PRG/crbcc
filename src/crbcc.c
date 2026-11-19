@@ -829,11 +829,15 @@ static char *format_bad_assignment_msg(SEXP expr) {
       UNPROTECT(2);
       return fallback;
     }
-    const char *line = CHAR(s);
-    int needed = 17 + (int) strlen(line) + 1;
+    // Make the text as pasteExpr() of GNU R does. sQuote() gives the quotes
+    // of the locale.
+    SEXP sq_call = PROTECT(Rf_lang2(Rf_install("sQuote"), de));
+    SEXP quoted_line = PROTECT(Rf_eval(sq_call, R_BaseEnv));
+    const char *line = CHAR(STRING_ELT(quoted_line, 0));
+    int needed = 16 + (int) strlen(line) + 1;
     char *msg = (char *) R_alloc(needed, sizeof(char));
-    snprintf(msg, needed, "bad assignment: '%s'", line);
-    UNPROTECT(2);
+    snprintf(msg, needed, "bad assignment: %s", line);
+    UNPROTECT(4);
     return msg;
   }
 
@@ -841,17 +845,19 @@ static char *format_bad_assignment_msg(SEXP expr) {
   for (R_xlen_t i = 0; i < Rf_length(de); i++) {
     SEXP s = STRING_ELT(de, i);
     if (s != NA_STRING) {
-      needed += 5 + (int) strlen(CHAR(s));
+      needed += 6 + (int) strlen(CHAR(s));
     }
   }
 
   char *msg = (char *) R_alloc(needed, sizeof(char));
-  strcpy(msg, "bad assignment:");
+  strcpy(msg, "bad assignment: ");
 
+  // pasteExpr() of GNU R calls paste(prefix, deparse(e), collapse = "").
+  // paste() puts a space between the prefix and each line.
   for (R_xlen_t i = 0; i < Rf_length(de); i++) {
     SEXP s = STRING_ELT(de, i);
     if (s != NA_STRING) {
-      strcat(msg, "\n    ");
+      strcat(msg, "\n     ");
       strcat(msg, CHAR(s));
     }
   }
@@ -1845,7 +1851,7 @@ static void add_local(NamesList *vars, const char *name) {
 // Works as findLocals1 of GNU R. The search of a call to a function in
 // shadowed includes its arguments. Otherwise, the search does not include
 // the arguments of quote(), expression() and local(). If the result depends
-// on shadowed, sets *uses_shadowed to true.
+// on shadowed, or if the search gives a warning, sets *uses_shadowed to true.
 static void find_locals1(SEXP e, NamesList shadowed, CompilerContext *cntxt, NamesList *vars,
                          bool *uses_shadowed) {
 
@@ -1867,6 +1873,15 @@ static void find_locals1(SEXP e, NamesList shadowed, CompilerContext *cntxt, Nam
   SEXP args = CDR(e);
 
   if (strcmp(v, "<-") == 0 || strcmp(v, "=") == 0) {
+    // GNU R gives all the strings of a string target to assign(). assign()
+    // warns in each pass of findLocalsList(). Thus do all the passes of GNU R.
+    SEXP target = CADR(e);
+    if (TYPEOF(target) == STRSXP && XLENGTH(target) == 0)
+      Rf_error("invalid first argument");
+    if (TYPEOF(target) == STRSXP && XLENGTH(target) > 1) {
+      Rf_warning("only the first element is used as variable name");
+      *uses_shadowed = true;
+    }
     add_local(vars, get_assigned_var(e, cntxt));
   } else if (strcmp(v, "for") == 0) {
     if (TYPEOF(CADR(e)) == SYMSXP) add_local(vars, CHAR(PRINTNAME(CADR(e))));
@@ -2717,6 +2732,10 @@ bool may_call_browser(SEXP expr, CompilerContext *cntxt) {
   if (TYPEOF(expr) == LANGSXP) {
 
     SEXP fun = CAR(expr);
+
+    // GNU R stops in mayCallBrowser(), at typeof(fun) of the empty symbol.
+    if (fun == R_MissingArg)
+      Rf_error("argument \"fun\" is missing, with no default");
 
     if (TYPEOF(fun) == SYMSXP) {
 
