@@ -85,6 +85,30 @@ same(f)
 body(f) <- call("<-", quote(g(1)), quote(message("EVALUATED")))
 stopifnot(length(run(crbcc::cmpfun, f, NULL)$out) == 0)
 
+## The warnings of the compile must be the same as in GNU R, for each
+## optimize level.
+warnings_of <- function(cmp, f, options) {
+  w <- character()
+  withCallingHandlers(cmp(f, options = options), warning = function(c) {
+    w <<- c(w, conditionMessage(c))
+    invokeRestart("muffleWarning")
+  })
+  w
+}
+same_warnings <- function(f) {
+  for (level in 0:3) {
+    options <- list(optimize = level)
+    stopifnot(identical(warnings_of(compiler::cmpfun, f, options),
+                        warnings_of(crbcc::cmpfun, f, options)))
+  }
+}
+## A partial argument match. GNU R calls match.call() twice for an inlined
+## simple .Internal call.
+op <- options(warnPartialMatchArgs = TRUE)
+same_warnings(function(x) nchar(x, ty = "chars"))
+same_warnings(function(x) rep_len(x, length = 3) + dnorm(x, me = 0))
+options(op)
+
 ## The arguments of cmpfun are the same as in GNU R.
 stopifnot(identical(formals(crbcc::cmpfun), formals(compiler::cmpfun)))
 
