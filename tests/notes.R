@@ -133,6 +133,13 @@ same_error(f)
 body(f) <- call("<-", call("names", as.call(list(quote(expr = ), quote(x)))), 1)
 same_error(f)
 
+## A constant fold that gives an error or a warning. GNU R does not fold the
+## call, and it writes nothing.
+same(function() -"a")
+same(function() 1:3 + 1:2)
+same(function() sqrt(-1), list(optimize = 3, suppressAll = FALSE))
+same(function() sqrt(4) + log(-1L) + exp(1) - 1i, list(optimize = 3, suppressAll = FALSE))
+
 ## The arguments of cmpfun are the same as in GNU R.
 stopifnot(identical(formals(crbcc::cmpfun), formals(compiler::cmpfun)))
 
