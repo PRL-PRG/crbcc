@@ -1980,9 +1980,15 @@ CompilerEnv *make_cenv(SEXP env) {
   CompilerEnv *cenv = (CompilerEnv *) R_alloc(1, sizeof(CompilerEnv));
   cenv->r_env = env;
   // frameTypes() of GNU R calls topenv(env). The default matchThisEnv of
-  // topenv() is this option.
-  SEXP target = Rf_GetOption1(Rf_install("topLevelEnvironment"));
-  cenv->top_env = Rf_topenv(TYPEOF(target) == ENVSXP ? target : R_NilValue, env);
+  // topenv() is the option topLevelEnvironment. If env is a top level
+  // environment, topenv() gives env for each value of the option. Thus get
+  // the option only for a different env, because Rf_GetOption1() is slow.
+  cenv->top_env = Rf_topenv(R_NilValue, env);
+  if (cenv->top_env != env) {
+    SEXP target = Rf_GetOption1(Rf_install("topLevelEnvironment"));
+    if (TYPEOF(target) == ENVSXP)
+      cenv->top_env = Rf_topenv(target, env);
+  }
 
   cenv->top_frame = (EnvFrame *) R_alloc(1, sizeof(EnvFrame));
 
