@@ -857,8 +857,10 @@ static char *format_bad_assignment_msg(SEXP expr) {
 static bool is_in_c_set(const char *str, const char *set[]) {
   if (str == NULL) return false;
 
+  // Most names are different in the first character. This test is faster
+  // than a call to strcmp().
   for (int i = 0; set[i] != NULL; i++) {
-    if (strcmp(str, set[i]) == 0) {
+    if (str[0] == set[i][0] && strcmp(str, set[i]) == 0) {
       return true;
     }
   }
@@ -2966,7 +2968,7 @@ bool cmp_builtin_default(SEXP e, CodeBuffer *cb, CompilerContext *cntxt) {
 
 // Macro to reduce boilerplate for handler assignment
 #define INLINE_HANDLER_CASE(NAMESTR, FN) \
-  if (strcmp(name, NAMESTR) == 0) { \
+  if (name[0] == NAMESTR[0] && strcmp(name, NAMESTR) == 0) { \
     *found = &FN; \
     return true; \
   }
@@ -3030,28 +3032,22 @@ bool get_inline_handler(const char *name, Inline in, CompilerContext *cntxt, Han
     INLINE_HANDLER_CASE(".Call", inline_c_call)
     INLINE_HANDLER_CASE("switch", inline_switch)
 
-    for (size_t i = 0; math1funs[i] != NULL; i++) {
-      if (strcmp(name, math1funs[i]) == 0) {
-        *found = &cmp_math_1;
-        return true;
-      }
+    if (is_in_c_set(name, math1funs)) {
+      *found = &cmp_math_1;
+      return true;
     }
 
-    for (size_t i = 0; safe_base_internals[i] != NULL; i++) {
-      if (strcmp(name, safe_base_internals[i]) == 0) {
-        *found = &cmp_simple_internal;
-        return true;
-      }
+    if (is_in_c_set(name, safe_base_internals)) {
+      *found = &cmp_simple_internal;
+      return true;
     }
   }
 
   if (in == STAT) {
 
-    for (size_t i = 0; safe_stats_internals[i] != NULL; i++) {
-      if (strcmp(name, safe_stats_internals[i]) == 0) {
-        *found = &cmp_simple_internal;
-        return true;
-      }
+    if (is_in_c_set(name, safe_stats_internals)) {
+      *found = &cmp_simple_internal;
+      return true;
     }
   }
 
