@@ -150,11 +150,15 @@ jobs:
         with:
           path: bench
           merge-multiple: true
+      # The image has no reactable. Install it and its missing dependencies
+      # from the CRAN snapshot of the image into a library of the job.
       - name: Report
         working-directory: bench
         run: |
+          mkdir rlib
+          Rscript -e 'install.packages("reactable", "rlib", repos = Sys.getenv("CRAN_SNAPSHOT"))'
           cp "$CRBCC_BENCHMARKS/install.csv" .
-          Rscript -e 'rmarkdown::render("../inst/benchmarks/crbcc_bench.Rmd",
+          R_LIBS="$PWD/rlib:$R_LIBS" Rscript -e 'rmarkdown::render("../inst/benchmarks/crbcc_bench.Rmd",
             output_dir = "site", output_file = "index.html", knit_root_dir = getwd(),
             params = list(install = "install.csv", compile = "compile.csv", assets = "site"))'
           cp install.csv compile.csv site/

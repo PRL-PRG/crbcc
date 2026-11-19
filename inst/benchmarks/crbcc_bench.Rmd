@@ -22,6 +22,7 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+library(reactable)
 
 ## The categorical slots 1-2 of the dataviz reference palette, in a fixed order.
 COL   <- c(gnur = "#2a78d6", crbcc = "#eb6834")
@@ -40,7 +41,32 @@ fmt   <- function(x, digits = 1) formatC(x, format = "f", digits = digits, big.m
 pct   <- function(x) paste0(fmt(100 * x, 0), "%")
 times <- function(x, digits = 1) paste0(fmt(x, digits), "x")
 gmean <- function(x) { x <- x[is.finite(x) & x > 0]; exp(mean(log(x))) }
-short <- function(commit) sub("^([0-9a-f]{7})[0-9a-f]{33}", "\\1", commit)
+pkg_group <- function(package) if_else(package %in% RECOMMENDED, "recommended", "CRAN")
+## GNU R time / crbcc time. NA if it is not defined, for example for 0 / 0.
+ratio <- function(gnur, crbcc) { r <- gnur / crbcc; r[!is.finite(r)] <- NA; r }
+## A Markdown link to a crbcc commit on GitHub, with the short hash as text.
+commit_link <- function(commit) {
+  if (!grepl("^[0-9a-f]{40}$", commit)) return(sprintf("`%s`", commit))
+  sprintf("[`%s`](https://github.com/PRL-PRG/crbcc/commit/%s)", substr(commit, 1, 7), commit)
+}
+
+## The colDefs of the columns <m>_gnur, <m>_crbcc, <m>_diff and <m>_ratio.
+## The column group gives the unit.
+compare_cols <- function(m, digits, ratio_digits = 2) {
+  num <- colFormat(digits = digits, separators = TRUE)
+  setNames(list(colDef(name = "GNU R", format = num), colDef(name = "crbcc", format = num),
+                colDef(name = "diff", format = num),
+                colDef(name = "ratio", format = colFormat(digits = ratio_digits, suffix = "x"))),
+           paste0(m, c("_gnur", "_crbcc", "_diff", "_ratio")))
+}
+## A table that the reader can search and sort. The columns must be numeric,
+## because the sort uses the values, not the formatted text.
+sortable <- function(data, columns, groups)
+  reactable(data, columns = c(list(package = colDef(minWidth = 95, sticky = "left"),
+                                   group = colDef(minWidth = 95)), columns),
+            columnGroups = groups, searchable = TRUE, pagination = FALSE, height = 600,
+            compact = TRUE, highlight = TRUE, style = list(fontSize = "13px"),
+            defaultColDef = colDef(minWidth = 51, headerStyle = list(whiteSpace = "nowrap")))
 
 theme_set(theme_minimal(base_size = 11) + theme(
   text = element_text(colour = INK2),
@@ -93,7 +119,7 @@ env_list <- function(b) {
               m$machine, m$logical_cpus, if (is.null(m$cpu_model)) "" else paste(",", m$cpu_model)),
       sprintf("- Start: %s UTC\n", sub("T", " ", substr(m$timestamp, 1, 16))),
       sprintf("- %s\n", m$r_version),
-      sprintf("- crbcc %s, commit `%s`\n", m$crbcc_version, m$crbcc_commit),
+      sprintf("- crbcc %s, commit %s\n", m$crbcc_version, commit_link(m$crbcc_commit)),
       sprintf("- Raw data: [%s](%s)\n", b$file, b$file), sep = "")
 }
 
@@ -109,20 +135,23 @@ pk <- passed(ins$data) |>
   summarise(value = median(value), .groups = "drop") |>
   pivot_wider(names_from = c(metric, compiler), values_from = value) |>
   filter(!is.na(elapsed_gnur), !is.na(elapsed_crbcc)) |>
-  mutate(group = if_else(package %in% RECOMMENDED, "recommended", "CRAN"), .after = package) |>
+  mutate(group = pkg_group(package), .after = package) |>
   arrange(desc(elapsed_gnur))
 
 ## The totals of all packages and of each group. less is the part of the
 ## GNU R elapsed time that crbcc saves.
 tot <- bind_rows(pk, mutate(pk, group = "all")) |>
-  group_by(group = factor(group, c("CRAN", "recommended", "all"))) |>
+  group_by(group = factor(group, c("all", "CRAN", "recommended"))) |>
   summarise(packages = n(), across(matches("_(gnur|crbcc)$"), sum)) |>
-  mutate(less = 1 - elapsed_crbcc / elapsed_gnur)
+  mutate(rest_gnur = elapsed_gnur - native_gnur - bytecode_gnur,
+         rest_crbcc = elapsed_crbcc - native_crbcc - bytecode_crbcc,
+         less = 1 - elapsed_crbcc / elapsed_gnur)
 less <- setNames(tot$less, tot$group)
+bc_share <- setNames(tot$bytecode_gnur / tot$elapsed_gnur, tot$group)
 n_grp <- setNames(tot$packages, tot$group)
 el <- c(gnur = sum(pk$elapsed_gnur), crbcc = sum(pk$elapsed_crbcc))
 
-# Compile benchmark --------------------------------------------------------
+# Compile benchmark data ---------------------------------------------------
 
 chk <- filter(clo$data, suite == "check")
 n_chk <- sum(chk$value[chk$metric == "closures"])
@@ -207,7 +236,7 @@ benchmark with the times of the other.
   packages takes `r pct(less[["all"]])` less time than with GNU R
   (`r fmt(el[["crbcc"]])` s, not `r fmt(el[["gnur"]])` s).
 - **Compile time** ([compile benchmark](#compile-benchmark), commit
-  `r short(clo$meta$crbcc_commit)`): crbcc compiles `r fmt(nrow(cl), 0)`
+  `r commit_link(clo$meta$crbcc_commit)`): crbcc compiles `r fmt(nrow(cl), 0)`
   closures `r times(speedup)` faster than GNU R.
 - **Correctness** ([compile benchmark](#compile-results)):
   `r correct_tldr`
@@ -245,6 +274,15 @@ package values. The rest is elapsed - native - bytecode. In this time, R
 parses the code, makes the lazy-load database and the help pages, and loads
 the package to test it. The statistics do not use failed runs.
 
+The tables compare the two compilers:
+
+- **diff**: the GNU R time minus the crbcc time. If it is positive, crbcc is
+  faster.
+- **ratio**: the GNU R time divided by the crbcc time. If it is above 1,
+  crbcc is faster. If it is not defined, for example for a package without
+  native code, the cell is empty.
+- **share**: the GNU R time of a metric divided by the GNU R elapsed time.
+
 The image build ran this benchmark with the crbcc of the image. Thus the
 results are for that crbcc, not for the commit of the compile benchmark.
 
@@ -261,29 +299,35 @@ failed_table(filter(ins$data, suite == "install"))
 With crbcc, the elapsed time is `r pct(less[["all"]])` less for all
 `r n_grp[["all"]]` packages: `r pct(less[["CRAN"]])` less for the
 `r n_grp[["CRAN"]]` CRAN packages and `r pct(less[["recommended"]])` less for
-the `r n_grp[["recommended"]]` recommended packages.
+the `r n_grp[["recommended"]]` recommended packages. With GNU R, the
+byte-code compile time is `r pct(bc_share[["all"]])` of the elapsed time.
 
 ```{r install-totals}
 tot |>
-  select(-less) |>
-  pivot_longer(-c(group, packages), names_to = c(".value", "compiler"), names_sep = "_") |>
-  arrange(group, factor(compiler, COMPILERS)) |>
-  transmute(packages = sprintf("%s (%d)", group, packages), compiler,
-            `elapsed (s)` = fmt(elapsed), `native (s)` = fmt(native),
-            `bytecode (s)` = fmt(bytecode), `rest (s)` = fmt(elapsed - native - bytecode))
+  pivot_longer(matches("_(gnur|crbcc)$"), names_to = c("metric", ".value"), names_sep = "_") |>
+  group_by(group) |>
+  mutate(share = gnur / gnur[metric == "elapsed"]) |>
+  ungroup() |>
+  arrange(group, factor(metric, c("elapsed", "native", "bytecode", "rest"))) |>
+  transmute(packages = if_else(metric == "elapsed", sprintf("%s (%d)", group, packages), ""),
+            metric, `GNU R (s)` = fmt(gnur), `crbcc (s)` = fmt(crbcc), `diff (s)` = fmt(gnur - crbcc),
+            ratio = times(gnur / crbcc, 2), share = pct(share))
 ```
 
-The package with the longest GNU R elapsed time is first.
+The package with the longest GNU R elapsed time is first. The right panel
+gives the byte-code share of each package.
 
 ```{r install-time-plot, fig.height = 1.5 + 0.25 * nrow(pk)}
-## A dot plot of the packages in p, in the order of p. If top is TRUE, the X
-## axis is also at the top, because the plot of all packages is tall.
+## A dot plot of the packages in p, in the order of p, and a bar plot of the
+## byte-code share. The share has a linear axis, thus it is a separate plot
+## next to the dot plot. If top is TRUE, the X axes are also at the top,
+## because the plot of all packages is tall.
 install_plot <- function(p, top = TRUE) {
-  p |>
+  p <- mutate(p, package = factor(package, rev(package)))
+  time <- p |>
     select(package, matches("^(elapsed|bytecode)_")) |>
     pivot_longer(-package, names_to = c("metric", "compiler"), names_sep = "_") |>
-    mutate(package = factor(package, rev(p$package)),
-           metric = factor(metric, c("elapsed", "bytecode"),
+    mutate(metric = factor(metric, c("elapsed", "bytecode"),
                            c("elapsed time of R CMD INSTALL (s)", "byte-code compile time (s)"))) |>
     ggplot(aes(value, package)) +
     geom_line(aes(group = package), colour = RANGE, linewidth = 0.9) +
@@ -291,27 +335,44 @@ install_plot <- function(p, top = TRUE) {
     compiler_fill + log_x(sec.axis = if (top) dup_axis() else waiver()) +
     labs(x = "s (log scale)", y = NULL) +
     facet_wrap(~ metric, scales = "free_x")
+  share <- p |>
+    mutate(metric = "GNU R byte-code share of elapsed") |>
+    ggplot(aes(bytecode_gnur / elapsed_gnur, package)) +
+    geom_col(fill = COL[["gnur"]], width = 0.5) +
+    scale_x_continuous(labels = scales::label_percent(), expand = expansion(mult = c(0, 0.05)),
+                       sec.axis = if (top) dup_axis() else waiver()) +
+    labs(x = "% (linear scale)", y = NULL) +
+    facet_wrap(~ metric) +
+    theme(axis.text.y = element_blank())
+  ## The two plots have the same rows, thus the packages align.
+  cbind(ggplotGrob(time), ggplotGrob(share), size = "first")
 }
 ## The README shows the first 15 packages.
 if (nzchar(params$assets))
   ggsave(file.path(params$assets, "install-time-top15.png"), install_plot(head(pk, 15), top = FALSE),
          width = 9, height = 1.5 + 0.25 * 15, dpi = 120, bg = "white")
-install_plot(pk)
+grid::grid.draw(install_plot(pk))
 ```
 
-The table gives the package values in the order of the plot. The column
-less is the part of the GNU R elapsed time that crbcc saves.
+The table gives the package values in the order of the plot. To sort the
+table, click a column header.
 
 ```{r install-table}
-pk |>
-  transmute(package, group,
-            `elapsed gnur (s)` = fmt(elapsed_gnur, 2),
-            `elapsed crbcc (s)` = fmt(elapsed_crbcc, 2),
-            less = pct(1 - elapsed_crbcc / elapsed_gnur),
-            `native gnur (s)` = fmt(native_gnur, 2),
-            `native crbcc (s)` = fmt(native_crbcc, 2),
-            `bytecode gnur (s)` = fmt(bytecode_gnur, 2),
-            `bytecode crbcc (s)` = fmt(bytecode_crbcc, 3))
+ins_tab <- select(pk, package, group)
+for (m in c("elapsed", "native", "bytecode")) {
+  gnur <- pk[[paste0(m, "_gnur")]]
+  crbcc <- pk[[paste0(m, "_crbcc")]]
+  ins_tab[paste0(m, c("_gnur", "_crbcc", "_diff", "_ratio"))] <- list(gnur, crbcc, gnur - crbcc, ratio(gnur, crbcc))
+}
+ins_tab$bytecode_share <- pk$bytecode_gnur / pk$elapsed_gnur
+el_cols <- compare_cols("elapsed", 2)
+na_cols <- compare_cols("native", 2)
+bc_cols <- compare_cols("bytecode", 3)
+sortable(ins_tab,
+  columns = c(el_cols, na_cols, bc_cols,
+              list(bytecode_share = colDef(name = "share", format = colFormat(percent = TRUE, digits = 0)))),
+  groups = list(colGroup("elapsed (s)", names(el_cols)), colGroup("native (s)", names(na_cols)),
+                colGroup("bytecode (s)", c(names(bc_cols), "bytecode_share"))))
 ```
 
 ## Compile benchmark {#compile-benchmark}
@@ -350,7 +411,8 @@ group of closures, the speedup is the geometric mean of the closure speedups.
 For a package or a group of packages, it is also the ratio of the totals. The
 size of a closure is the number of AST nodes in its body and in the default
 values of its formals (`crbcc:::function_size`). The statistics do not use
-failed runs.
+failed runs. In the table of the packages, diff and ratio compare the
+totals, as in the install benchmark.
 
 The benchmark ran in the benchmark image, with the crbcc of the commit below.
 
@@ -421,17 +483,29 @@ ggplot(x, aes(size, speedup)) +
        subtitle = "The points are closures. The line is the geometric mean of the size class.")
 ```
 
-The table gives the totals of each package. The package with the longest
-GNU R total is first.
+The table gives the totals and the closure speedup of each package. The
+sizes are in AST nodes. The package with the longest GNU R total is first.
 
 ```{r compile-package}
-cl |>
+cmp_tab <- cl |>
   group_by(package) |>
-  summarise(closures = n(), `median size` = median(size), largest = max(size),
-            geo = gmean(gnur / crbcc)) |>
+  summarise(closures = n(), size_median = median(size), size_max = max(size),
+            speedup = gmean(gnur / crbcc)) |>
   inner_join(cl_pk, by = "package") |>
   arrange(desc(gnur)) |>
-  transmute(package, closures = fmt(closures, 0), `median size` = fmt(`median size`, 0),
-            largest = fmt(largest, 0), `gnur (ms)` = fmt(gnur * 1e3), `crbcc (ms)` = fmt(crbcc * 1e3),
-            `gnur / crbcc total` = times(gnur / crbcc), `gnur / crbcc geo. mean` = times(geo))
+  transmute(package, group = pkg_group(package), closures, size_median, size_max,
+            total_gnur = 1e3 * gnur, total_crbcc = 1e3 * crbcc, total_diff = total_gnur - total_crbcc,
+            total_ratio = ratio(gnur, crbcc), speedup)
+tot_cols <- compare_cols("total", 1, ratio_digits = 1)
+count <- colFormat(digits = 0, separators = TRUE)
+sortable(cmp_tab,
+  columns = c(list(closures = colDef(name = "count", format = count),
+                   size_median = colDef(name = "median size", format = count, minWidth = 85),
+                   size_max = colDef(name = "largest", format = count)),
+              tot_cols,
+              list(speedup = colDef(name = "geo. mean", format = colFormat(digits = 1, suffix = "x"),
+                                    minWidth = 105))),
+  groups = list(colGroup("closures", c("closures", "size_median", "size_max")),
+                colGroup("total compile time (ms)", names(tot_cols)),
+                colGroup("closure speedup", "speedup")))
 ```
