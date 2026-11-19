@@ -170,7 +170,9 @@ cl <- passed(clo$data) |>
   filter(suite == "compile", metric == "compile") |>
   group_by(package = benchmark, closure, size = as.numeric(size), compiler) |>
   summarise(time = median(value), .groups = "drop") |>
-  pivot_wider(names_from = compiler, values_from = time) |>
+  pivot_wider(names_from = compiler, values_from = time)
+n_missing <- sum(is.na(cl$gnur) | is.na(cl$crbcc))
+cl <- cl |>
   filter(!is.na(gnur), !is.na(crbcc)) |>
   mutate(class = cut(size, c(1, 10, 100, 1e3, 1e4, Inf),
                      c("1-9", "10-99", "100-999", "1,000-9,999", ">= 10,000"), right = FALSE))
@@ -187,13 +189,18 @@ cl_pk <- passed(clo$data) |>
   pivot_wider(names_from = compiler, values_from = time) |>
   filter(!is.na(gnur), !is.na(crbcc))
 cmp <- c(gnur = sum(cl_pk$gnur), crbcc = sum(cl_pk$crbcc))
-speedup <- cmp[["gnur"]] / cmp[["crbcc"]]
+cmp_ratio <- cmp[["gnur"]] / cmp[["crbcc"]]
+## The headline: the geometric mean of the closure speedups. It does not use
+## a closure with a zero time, because its speedup is 0 or infinite.
+speedup <- gmean(cl$gnur / cl$crbcc)
+n_zero <- sum(cl$gnur == 0 | cl$crbcc == 0)
 largest <- slice_max(cl, size, n = 1, with_ties = FALSE)
 largest_name <- paste0("`", largest$closure, "`")
 
 n_chk_pkg <- n_distinct(chk$benchmark)
 if (nrow(chk_failed) == 0) {
-  correct_tldr <- sprintf("crbcc gives the same byte code as GNU R for all %s closures.", fmt(n_chk, 0))
+  correct_tldr <- sprintf("crbcc gives the same byte code as GNU R for all %s closures of %d packages.",
+                          fmt(n_chk, 0), n_chk_pkg)
   correct <- sprintf("The check compiled %s closures of %d packages. All closures have the same byte code with the two compilers.",
                      fmt(n_chk, 0), n_chk_pkg)
 } else {
@@ -236,8 +243,9 @@ benchmark with the times of the other.
   packages takes `r pct(less[["all"]])` less time than with GNU R
   (`r fmt(el[["crbcc"]])` s, not `r fmt(el[["gnur"]])` s).
 - **Compile time** ([compile benchmark](#compile-benchmark), commit
-  `r commit_link(clo$meta$crbcc_commit)`): crbcc compiles `r fmt(nrow(cl), 0)`
-  closures `r times(speedup)` faster than GNU R.
+  `r commit_link(clo$meta$crbcc_commit)`): crbcc compiles closures
+  `r times(speedup)` faster than GNU R. This value is the geometric mean of
+  the speedups of `r fmt(nrow(cl), 0)` closures of `r n_cl_pkg` packages.
 - **Correctness** ([compile benchmark](#compile-results)):
   `r correct_tldr`
 
@@ -406,10 +414,18 @@ garbage collections and the lazy loads of a run. The closure values do not
 include them, because the random order moves them to a different closure in
 each run.
 
-The speedup of a closure is its GNU R time divided by its crbcc time. For a
-group of closures, the speedup is the geometric mean of the closure speedups.
-For a package or a group of packages, it is also the ratio of the totals. The
-size of a closure is the number of AST nodes in its body and in the default
+The speedup of a closure is its GNU R time divided by its crbcc time. The
+compile speedup in the TL;DR and in the README badge is the geometric mean of
+the speedups of all timed closures. In this mean, each closure has the same
+weight. In the ratio of the totals, which the results also give, the large
+closures have more weight. If a closure has a zero time, its speedup is not
+defined, and the geometric means do not use it. If a closure has times of
+only one compiler, the statistics do not use it. In this report,
+`r n_zero` closures have a zero time and `r n_missing` closures have times of
+only one compiler.
+
+For a group of closures, for example a package, the speedup is the geometric
+mean of the closure speedups. The size of a closure is the number of AST nodes in its body and in the default
 values of its formals (`crbcc:::function_size`). The statistics do not use
 failed runs. In the table of the packages, diff and ratio compare the
 totals, as in the install benchmark.
@@ -433,10 +449,11 @@ chk_failed |>
 failed_table(filter(clo$data, suite == "compile"))
 ```
 
-GNU R compiles the `r fmt(nrow(cl), 0)` closures in `r fmt(cmp[["gnur"]], 2)`
-s, and crbcc in `r fmt(cmp[["crbcc"]], 2)` s. The speedup is
-`r times(speedup)` as the ratio of the totals and
-`r times(gmean(cl$gnur / cl$crbcc))` as the geometric mean.
+The timed runs compiled `r fmt(nrow(cl), 0)` closures of `r n_cl_pkg`
+packages. The compile speedup, the geometric mean of the closure speedups, is
+`r times(speedup)`. GNU R compiles the closures in `r fmt(cmp[["gnur"]], 2)` s,
+and crbcc in `r fmt(cmp[["crbcc"]], 2)` s. Thus the ratio of the totals is
+`r times(cmp_ratio)`.
 
 The median closure size is `r fmt(median(cl$size), 0)` AST nodes. The
 largest closure is `r largest_name` in `r largest$package`, with
