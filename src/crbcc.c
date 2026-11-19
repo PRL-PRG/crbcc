@@ -1544,9 +1544,10 @@ static SEXP check_call_error(SEXP cond, void *data) {
 }
 
 // Returns true if match.call(def, call) cannot fail: each tag of the call is
-// the name of a different formal, and each positional argument has a formal
-// or `...`. A false value does not tell that match.call() fails. The call has
-// no `...` argument. The check prevents a tryCatch() for each call.
+// the name of a different formal or goes to `...`, and each positional
+// argument has a formal or `...`. A false value does not tell that
+// match.call() fails. The call has no `...` argument. The check prevents a
+// tryCatch() for each call.
 static bool call_args_match(SEXP def, SEXP call) {
   bool has_dots = false;
   int nformals = 0;
@@ -1571,7 +1572,17 @@ static bool call_args_match(SEXP def, SEXP call) {
         break;
       }
     }
-    if (!is_formal) return false;
+    // A tag that is not a formal goes to `...`. But R can match it partially
+    // to a formal before `...`, and this match can fail.
+    if (!is_formal) {
+      const char *t = CHAR(PRINTNAME(tag));
+      if (!has_dots || t[0] == '\0') return false;
+      size_t tlen = strlen(t);
+      SEQ_ALONG(f, R_ClosureFormals(def)) {
+        if (TAG(f) == R_DotsSymbol) break;
+        if (strncmp(CHAR(PRINTNAME(TAG(f))), t, tlen) == 0) return false;
+      }
+    }
 
     for (SEXP b = CDR(call); b != a; b = CDR(b))
       if (TAG(b) == tag) return false;
@@ -1590,17 +1601,16 @@ bool check_call(SEXP def, SEXP call, const char **emsg) {
 
   if (emsg) *emsg = NULL;
 
+  // GNU R calls args() first, but the result is the same. args() is slow.
+  SEQ_ALONG(runner, CDR(call)) {
+    if (CAR(runner) == R_DotsSymbol)
+      return false;
+  }
+
   if (type == BUILTINSXP || type == SPECIALSXP) {
     SEXP args_call = PROTECT(Rf_lang2(Rf_install("args"), def));
     def = PROTECT(Rf_eval(args_call, R_BaseEnv));
     n_protect += 2;
-  }
-
-  SEQ_ALONG(runner, CDR(call)) {
-    if (CAR(runner) == R_DotsSymbol) {
-      UNPROTECT(n_protect);
-      return false;
-    }
   }
 
   if (def == R_NilValue || TYPEOF(def) != CLOSXP) {
