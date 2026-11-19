@@ -6,15 +6,17 @@
 #   test       Runs R CMD check of the package source on Linux and macOS. The
 #              check runs tests/compare.R. If the check gives an ERROR or a
 #              WARNING, the job is a failure.
-#   closures   Runs the suites check and closures of
-#              inst/benchmarks/crbcc_bench.py for the base and recommended
-#              packages, with the crbcc of the artifact "package". It runs in
-#              the image ghcr.io/prl-prg/crbcc-benchmarks
-#              (inst/benchmarks/docker). If a byte code is different, the job
-#              is a failure. The artifact "closures" has closures.csv.
+#   compile    Runs the suites check and compile of
+#              inst/benchmarks/crbcc_bench.py, with the crbcc of the artifact
+#              "package". The suite compile uses the 65 packages of the
+#              install benchmark. The suite check uses the base packages and
+#              the same 65 packages. It runs in the image
+#              ghcr.io/prl-prg/crbcc-benchmarks (inst/benchmarks/docker). If a
+#              byte code is different, the job is a failure. The artifact
+#              "compile" has compile.csv.
 #   report     Makes the report inst/benchmarks/crbcc_bench.Rmd from the
 #              install benchmark results in the image (install.csv) and from
-#              closures.csv. The artifact "report" has the report, the two
+#              compile.csv. The artifact "report" has the report, the two
 #              CSVs and the vignette.
 #   pages      Only for a push to main: puts the report on GitHub Pages.
 #              README.md shows its figure and its badge.
@@ -94,7 +96,7 @@ jobs:
           name: check-${{ matrix.os }}
           path: crbcc.Rcheck
 
-  closures:
+  compile:
     needs: build
     runs-on: ubuntu-latest
     container:
@@ -113,25 +115,25 @@ jobs:
           path: bench
       # crbcc_bench.py uses the crbcc in pkg-lib, not the crbcc of the image.
       # If a run is a failure, crbcc_bench.py exits with 1.
-      - name: Closures
+      - name: Compile
         working-directory: bench
         run: |
           mkdir pkg-lib
           R CMD INSTALL --library=pkg-lib crbcc_*.tar.gz
           uv run --script ../inst/benchmarks/crbcc_bench.py \
-            --include '^check/' --include '^closures/' \
+            --include '^check/' --include '^compile/' \
             --commit "${{ github.event.pull_request.head.sha || github.sha }}" \
-            --no-progress --csv closures.csv
+            --no-progress --csv compile.csv
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: closures
-          path: bench/closures.csv
+          name: compile
+          path: bench/compile.csv
 
-  # Make the report also if closures is a failure, because it shows the
+  # Make the report also if compile is a failure, because it shows the
   # failures.
   report:
-    needs: [build, closures]
+    needs: [build, compile]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     container:
@@ -154,8 +156,8 @@ jobs:
           cp "$CRBCC_BENCHMARKS/install.csv" .
           Rscript -e 'rmarkdown::render("../inst/benchmarks/crbcc_bench.Rmd",
             output_dir = "site", output_file = "index.html", knit_root_dir = getwd(),
-            params = list(install = "install.csv", closures = "closures.csv", assets = "site"))'
-          cp install.csv closures.csv site/
+            params = list(install = "install.csv", compile = "compile.csv", assets = "site"))'
+          cp install.csv compile.csv site/
           tar -xzf crbcc_*.tar.gz -O crbcc/inst/doc/crbcc.html > site/crbcc.html
       - uses: actions/upload-artifact@v7
         with:
@@ -168,7 +170,7 @@ jobs:
 
   pages:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [test, closures, report]
+    needs: [test, compile, report]
     runs-on: ubuntu-latest
     permissions:
       pages: write

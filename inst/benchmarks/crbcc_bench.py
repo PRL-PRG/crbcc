@@ -20,14 +20,14 @@ Suites:
   check     Compiles each closure of each package with the two compilers one
             time, and compares the byte code (closures.R). A run is a failure
             if a byte code is different or a compiler stops with an error.
-  closures  Compiles each closure of each package --runs times with each
+  compile   Compiles each closure of each package --runs times with each
             compiler, and measures the compile time of each closure. Each run
             compiles the closures in a different random order.
 
-The suite install uses the 50 CRAN packages in docker/cran50.txt and the 15
-recommended packages. The suites check and closures use the base packages in
-BASE and the recommended packages. With --installed, they also use all other
-installed packages.
+The suites install and compile use the 50 CRAN packages in docker/cran50.txt
+and the 15 recommended packages. The suite check uses the base packages in
+BASE and the same 65 packages. With --installed, the suite check also uses all
+other installed packages.
 
 To run one suite, use --include, for example --include '^check/'. Use -j only
 for the suite check, because parallel runs change the times.
@@ -44,7 +44,7 @@ time (timestamp), r_version, crbcc_version and crbcc_commit (--commit). Then
 it has one row for each value. The columns are: suite, benchmark (the
 package), run, compiler (gnur or crbcc, empty in the suite check), failure,
 iteration, warmup, metric, value, unit and lower_is_better. With the suite
-closures, there are also the columns closure and size, in a random order.
+compile, there are also the columns closure and size, in a random order.
 
   suite     metric    unit  value
   install   elapsed   s     the wall time of R CMD INSTALL
@@ -52,10 +52,10 @@ closures, there are also the columns closure and size, in a random order.
                             native code)
   install   bytecode  s     the time in compiler:::tryCmpfun
   check     closures        the number of closures
-  closures  compile   s     the compile time of one closure. closure is its
+  compile   compile   s     the compile time of one closure. closure is its
                             name and size is crbcc:::function_size.
 
-Each run of the suites check and closures also has the metric elapsed, the
+Each run of the suites check and compile also has the metric elapsed, the
 wall time of the run. Thus the CSV has a row also for a failed run.
 
 Directories in the work directory:
@@ -123,11 +123,11 @@ CRAN = [
 class Params(SharedBenchParams):
     runs: int = field(
         default=3,
-        metadata={"help": "The runs of each package and compiler in the suites install and closures."},
+        metadata={"help": "The runs of each package and compiler in the suites install and compile."},
     )
     installed: bool = field(
         default=False,
-        metadata={"action": "store_true", "help": "The suites check and closures also use all other installed packages."},
+        metadata={"action": "store_true", "help": "The suite check also uses all other installed packages."},
     )
     commit: str = field(
         default="unknown",
@@ -246,7 +246,7 @@ def closures_r(mode: str, package: str) -> list[str]:
 
 
 def suites(params: Params):
-    packages = list(dict.fromkeys(BASE + RECOMMENDED + (installed() if params.installed else [])))
+    packages = list(dict.fromkeys(BASE + CRAN + RECOMMENDED + (installed() if params.installed else [])))
 
     def package_suite(name: str, packages: list[str]):
         return (
@@ -272,7 +272,7 @@ def suites(params: Params):
         package_suite("check", packages)
         .with_command(lambda ctx: closures_r("check", ctx.benchmark))
         .with_metric(Time(), RegexMetric("closures", r"^RBC closures: (\d+)$", stdout_metric_source)),
-        package_suite("closures", packages)
+        package_suite("compile", CRAN + RECOMMENDED)
         .with_matrix(compiler=COMPILERS)
         .with_command(lambda ctx: closures_r(ctx.data.compiler, ctx.benchmark))
         .with_metric(Time(), ClosureMetric())
