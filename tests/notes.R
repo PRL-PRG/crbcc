@@ -50,6 +50,15 @@ same(local({ g <- function(a) NULL; function() g(1, 2) }))
 same(local({ sum <- function(a) a; function() sum(1, 2) }))
 same((function() { g <- function(a) NULL; function() g(1, 2) })())
 same((function(...) function() list(..1, ...))(1))
+## A string in latin1 as a name. GNU R translates it to the native encoding.
+s <- iconv("\u00e9", "UTF-8", "latin1")
+f <- function(x) NULL
+body(f) <- call("{", call("<-", s, 1), as.name("\u00e9"))
+same(f)
+body(f) <- call("<<-", s, 1)
+same(f)
+body(f) <- call("{", call("<-", call("names", call("$", quote(x), s)), 1), call("$", quote(x), s))
+same(f)
 
 ## The other notes.
 same(src("function() {\n  zzz()\n}"))
