@@ -1,10 +1,10 @@
 ---
-title: "R bytecode compiler written in C"
+pagetitle: "crbcc: R bytecode compiler written in C"
 output:
   html_document:
-    toc: true
-    toc_depth: 3
-    df_print: kable
+    theme: null
+    highlight: null
+    mathjax: null
 params:
   ## The --csv reports of crbcc_bench.py. install has the suite install, from
   ## the image build. compile has the suites check and compile, from the CI.
@@ -18,18 +18,23 @@ params:
 
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
-                      fig.width = 9, dev = "png", dpi = 120)
+                      dev = "png", dpi = 100, fig.width = 5.6)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(reactable)
+library(htmltools)
 
 ## The categorical slots 1-2 of the dataviz reference palette, in a fixed order.
-COL   <- c(gnur = "#2a78d6", crbcc = "#eb6834")
-INK   <- "#0b0b0b"  # primary text
-INK2  <- "#52514e"  # secondary text, axes
-GRID  <- "#e4e3df"  # grid lines
-RANGE <- "#c3c2b7"  # line between the compilers in a dot plot
+## The CSS of the page gets the same values.
+COL    <- c(gnur = "#2a78d6", crbcc = "#eb6834")
+NAME   <- c(gnur = "GNU R", crbcc = "crbcc")
+INK    <- "#0b0b0b"  # primary text
+INK2   <- "#52514e"  # secondary text, axes
+INK3   <- "#898781"  # muted marks
+GRID   <- "#e4e3df"  # grid lines
+## The parts of the install time, from other slots of the same palette.
+PART   <- c(native = "#9085e9", bytecode = "#eda100", rest = "#e87ba4")
 COMPILERS <- names(COL)
 
 ## This list is the same as in crbcc_bench.py.
@@ -42,49 +47,31 @@ pct   <- function(x) paste0(fmt(100 * x, 0), "%")
 times <- function(x, digits = 1) paste0(fmt(x, digits), "x")
 gmean <- function(x) { x <- x[is.finite(x) & x > 0]; exp(mean(log(x))) }
 pkg_group <- function(package) if_else(package %in% RECOMMENDED, "recommended", "CRAN")
-## GNU R time / crbcc time. NA if it is not defined, for example for 0 / 0.
-ratio <- function(gnur, crbcc) { r <- gnur / crbcc; r[!is.finite(r)] <- NA; r }
 ## A Markdown link to a crbcc commit on GitHub, with the short hash as text.
 commit_link <- function(commit) {
   if (!grepl("^[0-9a-f]{40}$", commit)) return(sprintf("`%s`", commit))
   sprintf("[`%s`](https://github.com/PRL-PRG/crbcc/commit/%s)", substr(commit, 1, 7), commit)
 }
+## The environment of a benchmark, from the header of its CSV file.
+machine  <- function(m) sprintf("%s, %s logical CPUs, %s %s", m$cpu_model %||% "unknown CPU",
+                                m$logical_cpus, m$system, m$machine)
+software <- function(m) sprintf("R %s, crbcc %s, commit %s", sub("^R version ([^ ]+).*", "\\1", m$r_version),
+                                m$crbcc_version, commit_link(m$crbcc_commit))
+started  <- function(m) paste(sub("T", " ", substr(m$timestamp, 1, 16)), "UTC")
 
-## The colDefs of the columns <m>_gnur, <m>_crbcc, <m>_diff and <m>_ratio.
-## The column group gives the unit.
-compare_cols <- function(m, digits, ratio_digits = 2) {
-  num <- colFormat(digits = digits, separators = TRUE)
-  setNames(list(colDef(name = "GNU R", format = num), colDef(name = "crbcc", format = num),
-                colDef(name = "diff", format = num),
-                colDef(name = "ratio", format = colFormat(digits = ratio_digits, suffix = "x"))),
-           paste0(m, c("_gnur", "_crbcc", "_diff", "_ratio")))
-}
-## A table that the reader can search and sort. The columns must be numeric,
-## because the sort uses the values, not the formatted text.
-sortable <- function(data, columns, groups)
-  reactable(data, columns = c(list(package = colDef(minWidth = 95, sticky = "left"),
-                                   group = colDef(minWidth = 95)), columns),
-            columnGroups = groups, searchable = TRUE, pagination = FALSE, height = 600,
-            compact = TRUE, highlight = TRUE, style = list(fontSize = "13px"),
-            defaultColDef = colDef(minWidth = 51, headerStyle = list(whiteSpace = "nowrap")))
-
-theme_set(theme_minimal(base_size = 11) + theme(
+theme_set(theme_minimal(base_size = 15) + theme(
   text = element_text(colour = INK2),
+  axis.title = element_text(size = rel(0.85)),
   axis.text = element_text(colour = INK2),
   axis.text.y = element_text(colour = INK),
   legend.text = element_text(colour = INK),
-  strip.text = element_text(colour = INK, hjust = 0, size = 11),
-  plot.subtitle = element_text(colour = INK2),
-  legend.position = "top", legend.justification = "left", legend.title = element_blank(),
+  legend.position = "top", legend.location = "plot", legend.justification = "left",
+  legend.title = element_blank(), legend.margin = margin(0, 0, 0, 0),
   panel.grid.major = element_line(colour = GRID, linewidth = 0.3),
   panel.grid.minor = element_blank(),
-  plot.background = element_rect(fill = "white", colour = NA)))
-compiler_fill   <- scale_fill_manual(values = COL, breaks = COMPILERS)
-compiler_colour <- scale_colour_manual(values = COL, breaks = COMPILERS)
-## Without drop0trailing, the labels of a duplicated axis can have a
-## different number of decimals than the labels of the main axis.
-log_x <- function(...) scale_x_log10(labels = scales::label_comma(drop0trailing = TRUE), ...)
-log_y <- function(...) scale_y_log10(labels = scales::label_comma(drop0trailing = TRUE), ...)
+  plot.background = element_rect(fill = "white", colour = NA),
+  plot.margin = margin(6, 14, 6, 6)))
+compiler_fill <- scale_fill_manual(values = COL, breaks = COMPILERS, labels = NAME)
 
 # Read the CSV files -------------------------------------------------------
 
@@ -94,8 +81,7 @@ read_bench <- function(file) {
   meta <- sub("^# ", "", grep("^#", lines, value = TRUE))
   data <- read.csv(text = grep("^#", lines, value = TRUE, invert = TRUE),
                    colClasses = "character")
-  list(file = basename(file),
-       meta = as.list(setNames(sub("^[^:]*: ", "", meta), sub(": .*", "", meta))),
+  list(meta = as.list(setNames(sub("^[^:]*: ", "", meta), sub(": .*", "", meta))),
        data = mutate(data, run = as.integer(run), value = as.numeric(value)))
 }
 ins <- read_bench(params$install)
@@ -105,29 +91,14 @@ clo <- read_bench(params$compile)
 RUN <- c("suite", "benchmark", "compiler", "run")
 failed_runs <- function(d) d |> filter(failure != "") |> distinct(across(all_of(RUN)), failure)
 passed <- function(d) anti_join(d, failed_runs(d), by = RUN)
-failed_table <- function(d) {
-  f <- failed_runs(d)
-  if (nrow(f) > 0)
-    knitr::kable(mutate(f, failure = gsub("\\s+", " ", failure)),
-                 caption = "Failed runs. The statistics do not use these runs.")
-}
-
-## The environment of a benchmark, from the header of its CSV file.
-env_list <- function(b) {
-  m <- b$meta
-  cat(sprintf("- Machine: `%s`, %s %s, %s logical CPUs%s\n", m$hostname, m$system,
-              m$machine, m$logical_cpus, if (is.null(m$cpu_model)) "" else paste(",", m$cpu_model)),
-      sprintf("- Start: %s UTC\n", sub("T", " ", substr(m$timestamp, 1, 16))),
-      sprintf("- %s\n", m$r_version),
-      sprintf("- crbcc %s, commit %s\n", m$crbcc_version, commit_link(m$crbcc_commit)),
-      sprintf("- Raw data: [%s](%s)\n", b$file, b$file), sep = "")
-}
+failed <- bind_rows(failed_runs(ins$data), failed_runs(clo$data))
 
 # Install benchmark --------------------------------------------------------
 
 ## One row for each package, with the median of the runs for each metric and
 ## compiler, for example elapsed_gnur. Only the packages with results of the
 ## two compilers. The longest elapsed_gnur is first.
+ins_pkgs <- unique(ins$data$benchmark)
 ins_runs <- n_distinct(ins$data$run)
 pk <- passed(ins$data) |>
   filter(suite == "install") |>
@@ -141,25 +112,21 @@ pk <- passed(ins$data) |>
 ## The totals of all packages and of each group. less is the part of the
 ## GNU R elapsed time that crbcc saves.
 tot <- bind_rows(pk, mutate(pk, group = "all")) |>
-  group_by(group = factor(group, c("all", "CRAN", "recommended"))) |>
+  group_by(group) |>
   summarise(packages = n(), across(matches("_(gnur|crbcc)$"), sum)) |>
   mutate(rest_gnur = elapsed_gnur - native_gnur - bytecode_gnur,
          rest_crbcc = elapsed_crbcc - native_crbcc - bytecode_crbcc,
          less = 1 - elapsed_crbcc / elapsed_gnur)
-less <- setNames(tot$less, tot$group)
-bc_share <- setNames(tot$bytecode_gnur / tot$elapsed_gnur, tot$group)
+less  <- setNames(tot$less, tot$group)
 n_grp <- setNames(tot$packages, tot$group)
-el <- c(gnur = sum(pk$elapsed_gnur), crbcc = sum(pk$elapsed_crbcc))
+all_pk <- filter(tot, group == "all")
 
-# Compile benchmark data ---------------------------------------------------
+# Compile benchmark --------------------------------------------------------
 
 chk <- filter(clo$data, suite == "check")
 n_chk <- sum(chk$value[chk$metric == "closures"])
+n_chk_pkg <- n_distinct(chk$benchmark)
 chk_failed <- failed_runs(chk)
-## The failure of a check gives the count: "<n> closures differ or do not
-## compile".
-n_bad <- sum(as.integer(regmatches(chk_failed$failure,
-  regexpr("[0-9]+(?= closures differ)", chk_failed$failure, perl = TRUE))))
 cl_passes <- n_distinct(clo$data$iteration[clo$data$suite == "compile" & clo$data$metric == "compile"])
 n_cl_pkg <- n_distinct(clo$data$benchmark[clo$data$suite == "compile"])
 
@@ -174,8 +141,7 @@ cl <- passed(clo$data) |>
 n_missing <- sum(is.na(cl$gnur) | is.na(cl$crbcc))
 cl <- cl |>
   filter(!is.na(gnur), !is.na(crbcc)) |>
-  mutate(class = cut(size, c(1, 10, 100, 1e3, 1e4, Inf),
-                     c("1-9", "10-99", "100-999", "1,000-9,999", ">= 10,000"), right = FALSE))
+  mutate(class = cut(size, c(1, 10, 100, 1e3, 1e4, Inf), right = FALSE))
 
 ## One row for each package: the median pass time of each compiler. The
 ## time of a pass (the column iteration) is the sum of the compile times of
@@ -189,26 +155,10 @@ cl_pk <- passed(clo$data) |>
   pivot_wider(names_from = compiler, values_from = time) |>
   filter(!is.na(gnur), !is.na(crbcc))
 cmp <- c(gnur = sum(cl_pk$gnur), crbcc = sum(cl_pk$crbcc))
-cmp_ratio <- cmp[["gnur"]] / cmp[["crbcc"]]
 ## The headline: the geometric mean of the closure speedups. It does not use
 ## a closure with a zero time, because its speedup is 0 or infinite.
 speedup <- gmean(cl$gnur / cl$crbcc)
 n_zero <- sum(cl$gnur == 0 | cl$crbcc == 0)
-largest <- slice_max(cl, size, n = 1, with_ties = FALSE)
-largest_name <- paste0("`", largest$closure, "`")
-
-n_chk_pkg <- n_distinct(chk$benchmark)
-if (nrow(chk_failed) == 0) {
-  correct_tldr <- sprintf("crbcc gives the same byte code as GNU R for all %s closures of %d packages.",
-                          fmt(n_chk, 0), n_chk_pkg)
-  correct <- sprintf("The check compiled %s closures of %d packages. All closures have the same byte code with the two compilers.",
-                     fmt(n_chk, 0), n_chk_pkg)
-} else {
-  failed_counts <- sprintf("failed for %d of %d packages and %s of %s closures",
-                           nrow(chk_failed), n_chk_pkg, fmt(n_bad, 0), fmt(n_chk, 0))
-  correct_tldr <- paste0("the check ", failed_counts, ".")
-  correct <- paste0("The check ", failed_counts, ":")
-}
 
 # Badge for the README -----------------------------------------------------
 
@@ -220,310 +170,385 @@ if (nzchar(params$assets)) {
 }
 ```
 
-# Introduction
-
-crbcc compiles R code to byte code. It gives the same byte code as the GNU R
-`compiler` package, but it is faster because it is implemented
-directly in C instead of in R. It follows the same structure as the
-original compiler so all credit goes to Luke Tierney.
-
-- [README and source code](https://github.com/PRL-PRG/crbcc#readme)
-- [Use crbcc](https://prl-prg.github.io/crbcc/crbcc.html): compile closures
-  and install packages with crbcc
-- [crbcc on CRAN](https://CRAN.R-project.org/package=crbcc)
-
-# Benchmarks
-
-The two benchmarks ran on different machines, at different times, and
-possibly with different crbcc versions. Do not compare the times of one
-benchmark with the times of the other.
-
-## TL;DR
-
-- **Install time** ([install benchmark](#install-benchmark), crbcc
-  `r ins$meta$crbcc_version`): with crbcc, `R CMD INSTALL` of `r nrow(pk)`
-  packages takes `r pct(less[["all"]])` less time than with GNU R
-  (`r fmt(el[["crbcc"]])` s, not `r fmt(el[["gnur"]])` s).
-- **Compile time** ([compile benchmark](#compile-benchmark), commit
-  `r commit_link(clo$meta$crbcc_commit)`): crbcc compiles closures
-  `r times(speedup)` faster than GNU R. This value is the geometric mean of
-  the speedups of `r fmt(nrow(cl), 0)` closures of `r n_cl_pkg` packages,
-  with [warm times](#compile-methodology).
-- **Correctness** ([compile benchmark](#compile-results)):
-  `r correct_tldr`
-
-## Install benchmark {#install-benchmark}
-
-### Methodology {#install-methodology}
-
-The benchmark installs `r n_distinct(ins$data$benchmark)` packages: the
-`r sum(!unique(ins$data$benchmark) %in% RECOMMENDED)` CRAN packages with the
-most downloads and the `r sum(unique(ins$data$benchmark) %in% RECOMMENDED)`
-recommended packages. Each install is `R CMD INSTALL` of the CRAN source
-tarball. It runs `configure` and compiles the native code with
-`MAKEFLAGS=-j8`. For each package, `r ins_runs` runs with GNU R come first,
-then `r ins_runs` runs with crbcc. The installs run one at a time.
-
-We `inst/benchmarks/timing-profile.R` to inject timers into the
-installation process. Each run gives three numbers:
-
-- **elapsed**: the wall time of `R CMD INSTALL`.
-- **native**: the time in `tools:::.shlib_internal`, which compiles and links
-  the C, C++ and Fortran code.
-- **bytecode**: the time in `compiler:::tryCmpfun`, which compiles each
-  closure to byte code.
-
-The value of a package is the median of its runs. A total is the sum of the
-package values. The `rest` is `elapsed - native - bytecode` (code parsing, 
-installed package test loading, ...).
-
-The tables compare the two compilers:
-
-- **diff**: the GNU R time minus the crbcc time. If it is positive, crbcc is
-  faster.
-- **ratio**: the GNU R time divided by the crbcc time. If it is above 1,
-  crbcc is faster. If it is not defined, for example for a package without
-  native code, the cell is empty.
-- **share**: the GNU R time of a metric divided by the GNU R elapsed time.
-
-The image build ran this benchmark with the crbcc of the image. Thus the
-results are for that crbcc, not for the commit of the compile benchmark.
-
-```{r install-env, results = "asis"}
-env_list(ins)
-```
-
-### Results {#install-results}
-
-```{r install-failed}
-failed_table(filter(ins$data, suite == "install"))
-```
-
-With crbcc, the elapsed time is `r pct(less[["all"]])` less for all
-`r n_grp[["all"]]` packages: `r pct(less[["CRAN"]])` less for the
-`r n_grp[["CRAN"]]` CRAN packages and `r pct(less[["recommended"]])` less for
-the `r n_grp[["recommended"]]` recommended packages. With GNU R, the
-byte-code compile time is `r pct(bc_share[["all"]])` of the elapsed time.
-
-```{r install-totals}
-tot |>
-  pivot_longer(matches("_(gnur|crbcc)$"), names_to = c("metric", ".value"), names_sep = "_") |>
-  group_by(group) |>
-  mutate(share = gnur / gnur[metric == "elapsed"]) |>
-  ungroup() |>
-  arrange(group, factor(metric, c("elapsed", "native", "bytecode", "rest"))) |>
-  transmute(packages = if_else(metric == "elapsed", sprintf("%s (%d)", group, packages), ""),
-            metric, `GNU R (s)` = fmt(gnur), `crbcc (s)` = fmt(crbcc), `diff (s)` = fmt(gnur - crbcc),
-            ratio = times(gnur / crbcc, 2), share = pct(share))
-```
-
-The package with the longest GNU R elapsed time is first. The right panel
-gives the byte-code share of each package.
-
-```{r install-time-plot, fig.height = 1.5 + 0.25 * nrow(pk)}
-## A dot plot of the packages in p, in the order of p, and a bar plot of the
-## byte-code share. The share has a linear axis, thus it is a separate plot
-## next to the dot plot. If top is TRUE, the X axes are also at the top,
-## because the plot of all packages is tall.
-install_plot <- function(p, top = TRUE) {
-  p <- mutate(p, package = factor(package, rev(package)))
-  time <- p |>
-    select(package, matches("^(elapsed|bytecode)_")) |>
-    pivot_longer(-package, names_to = c("metric", "compiler"), names_sep = "_") |>
-    mutate(metric = factor(metric, c("elapsed", "bytecode"),
-                           c("elapsed time of R CMD INSTALL (s)", "byte-code compile time (s)"))) |>
-    ggplot(aes(value, package)) +
-    geom_line(aes(group = package), colour = RANGE, linewidth = 0.9) +
-    geom_point(aes(fill = compiler), shape = 21, colour = "white", size = 3.2, stroke = 0.8) +
-    compiler_fill + log_x(sec.axis = if (top) dup_axis() else waiver()) +
-    labs(x = "s (log scale)", y = NULL) +
-    facet_wrap(~ metric, scales = "free_x")
-  share <- p |>
-    mutate(metric = "GNU R byte-code share of elapsed") |>
-    ggplot(aes(bytecode_gnur / elapsed_gnur, package)) +
-    geom_col(fill = COL[["gnur"]], width = 0.5) +
-    scale_x_continuous(labels = scales::label_percent(), expand = expansion(mult = c(0, 0.05)),
-                       sec.axis = if (top) dup_axis() else waiver()) +
-    labs(x = "% (linear scale)", y = NULL) +
-    facet_wrap(~ metric) +
-    theme(axis.text.y = element_blank())
-  ## The two plots have the same rows, thus the packages align.
-  cbind(ggplotGrob(time), ggplotGrob(share), size = "first")
+```{css}
+:root {
+  color-scheme: light;
+  --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
+  --page: #f6f6f3; --card: #fff; --line: #e1e0d9; --code: #efeee9;
+  --good: #006300; --bad: #d03b3b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-## The README shows the first 15 packages.
+html { -webkit-text-size-adjust: 100%; }
+body {
+  max-width: 800px; margin: 0 auto; padding: 0 16px 64px;
+  background: var(--page); color: var(--ink);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+h1, h2, h3 { line-height: 1.2; color: var(--ink); }
+h1 { font-size: clamp(1.75rem, 6vw, 2.5rem); font-weight: 700; letter-spacing: -0.025em; margin: 0 0 16px; }
+h2 { font-size: 1.5rem; font-weight: 650; letter-spacing: -0.015em; margin: 56px 0 16px; }
+h3 { font-size: 1.0625rem; font-weight: 600; margin: 0 0 8px; }
+p, ul, ol, dl { margin: 0 0 12px; }
+ul, ol { padding-left: 1.25rem; }
+li { margin: 2px 0; }
+a { color: inherit; text-decoration-color: var(--ink-3); text-underline-offset: 2px; }
+a:hover { text-decoration-color: var(--ink); }
+code { font: 0.875em var(--mono); background: var(--code); padding: 1px 4px; border-radius: 4px; white-space: nowrap; }
+img { max-width: 100%; height: auto; display: block; }
+
+.hero { padding: 48px 0 8px; }
+.eyebrow { font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; }
+.lede { font-size: 1.0625rem; color: var(--ink-2); max-width: 64ch; }
+.links { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 0; }
+.links a { padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); font-size: 0.875rem; text-decoration: none; }
+.links a:hover { border-color: var(--ink-3); }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 32px 0 12px; }
+.tile { display: flex; flex-direction: column; gap: 6px; padding: 18px 20px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; text-decoration: none; }
+.tile:hover { border-color: var(--ink-3); }
+.tile-label { font-size: 0.8125rem; font-weight: 600; color: var(--ink-2); }
+.tile-value { font-size: 2.5rem; font-weight: 650; letter-spacing: -0.03em; line-height: 1.05; color: var(--good); }
+.tile-value small { font-size: 1rem; font-weight: 600; letter-spacing: 0; color: var(--ink-2); margin-left: 6px; }
+.tile.bad .tile-value { color: var(--bad); }
+.tile-context { font-size: 0.875rem; color: var(--ink-2); }
+
+.note { font-size: 0.875rem; color: var(--ink-2); border-left: 3px solid var(--ink-3); padding: 2px 0 2px 12px; margin: 16px 0; }
+.alert { background: #fdf1f0; border: 1px solid #efc6c3; border-radius: 12px; padding: 16px 20px; margin: 16px 0; }
+.alert h3 { color: var(--bad); }
+.alert table { font-size: 0.8125rem; border-collapse: collapse; width: 100%; }
+.alert td:last-child { min-width: 16rem; }
+.alert th, .alert td { text-align: left; vertical-align: top; padding: 4px 8px; border-top: 1px solid #efc6c3; }
+.scroll { overflow-x: auto; }
+
+.level3 { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin: 0 0 12px; }
+.level3 > :last-child { margin-bottom: 0; }
+.caption { font-size: 0.875rem; color: var(--ink-2); }
+.level3 img { margin: 8px auto 12px; }
+
+dl { display: grid; grid-template-columns: 6.5rem 1fr; gap: 8px 16px; font-size: 0.9375rem; }
+dt { font-size: 0.8125rem; font-weight: 600; color: var(--ink-2); padding-top: 2px; }
+dd { margin: 0; }
+@media (max-width: 560px) {
+  dl { grid-template-columns: 1fr; gap: 0; }
+  dt { margin-top: 10px; }
+  dt:first-child { margin-top: 0; }
+  .level3 { padding: 16px 14px; }
+}
+
+.dot, .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+.sw { border-radius: 2px; }
+.gnur .dot, .rt-th.gnur .rt-text-content::before { background: var(--gnur); }
+.crbcc .dot, .rt-th.crbcc .rt-text-content::before { background: var(--crbcc); }
+.sw.native, .seg.native { background: var(--native); }
+.sw.bytecode, .seg.bytecode { background: var(--bytecode); }
+.sw.rest, .seg.rest { background: var(--rest); }
+
+.bars { display: grid; gap: 14px; margin: 12px 0 14px; }
+.bar-head { display: flex; justify-content: space-between; font-size: 0.875rem; font-weight: 600; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.bar { display: flex; gap: 2px; height: 28px; }
+.seg { flex: 0 0 0; min-width: 3px; border-radius: 4px; display: flex; align-items: center; font-size: 0.8125rem; font-weight: 600; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
+.seg:not(:empty) { padding: 0 7px; }
+.key { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 0.8125rem; color: var(--ink-2); margin-bottom: 12px; }
+
+.rt-th.gnur .rt-text-content::before, .rt-th.crbcc .rt-text-content::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+.files { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.files a { font: 0.875rem var(--mono); padding: 6px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; text-decoration: none; }
+.files a:hover { border-color: var(--ink-3); }
+/* macOS hides a default scrollbar. A styled scrollbar stays visible, thus
+   the reader sees that the table has more rows. */
+.rt-table::-webkit-scrollbar { width: 8px; height: 8px; }
+.rt-table::-webkit-scrollbar-thumb { background: var(--ink-3); border-radius: 4px; }
+.rows { margin-top: 8px; }
+```
+
+```{r palette}
+## The compiler and metric colors for the CSS, from the R values.
+tags$style(sprintf(":root { --gnur: %s; --crbcc: %s; --native: %s; --bytecode: %s; --rest: %s; }",
+                   COL[["gnur"]], COL[["crbcc"]], PART[["native"]], PART[["bytecode"]], PART[["rest"]]))
+```
+
+<header class="hero">
+<p class="eyebrow">crbcc benchmark report</p>
+<h1>R bytecode compiler written in C</h1>
+<p class="lede">crbcc gives the same byte code as the GNU R <code>compiler</code> package. It is faster, because it is written in C, not in R. It follows the same structure as the original compiler so all credit goes to Luke Tierney.</p>
+<p class="links"><a href="https://github.com/PRL-PRG/crbcc#readme">README and source code</a><a href="https://prl-prg.github.io/crbcc/crbcc.html">Use crbcc</a><a href="https://CRAN.R-project.org/package=crbcc">crbcc on CRAN</a></p>
+</header>
+
+```{r tiles}
+tile <- function(href, label, value, unit, context, class = "")
+  tags$a(class = paste("tile", class), href = href, span(class = "tile-label", label),
+         span(class = "tile-value", value, tags$small(unit)), span(class = "tile-context", context))
+div(class = "tiles",
+  tile("#install-results", "Install time", pct(less[["all"]]), "less",
+       sprintf("R CMD INSTALL of %d packages: %s s with crbcc, %s s with GNU R.",
+               n_grp[["all"]], fmt(all_pk$elapsed_crbcc), fmt(all_pk$elapsed_gnur))),
+  tile("#compile-results", "Compile speedup", times(speedup), "faster",
+       sprintf("Geometric mean of %s closure speedups, %d packages.", fmt(nrow(cl), 0), n_distinct(cl$package))),
+  if (nrow(chk_failed) == 0)
+    tile("#check-method", "Byte code", "Identical", NULL,
+         sprintf("Same as GNU R for %s closures of %d packages.", fmt(n_chk, 0), n_chk_pkg))
+  else
+    tile("#failed", "Byte code", "\u2717 Differs", NULL,
+         sprintf("%d of %d packages fail the check.", nrow(chk_failed), n_chk_pkg), "bad"))
+```
+
+::: note
+The install benchmark is slow, thus it runs only for a new crbcc release.
+The compile benchmark is fast, thus it runs in the CI for each commit. The
+two benchmarks ran on different machines, at different times, and possibly
+with different crbcc versions. Do not compare their times.
+:::
+
+```{r failed}
+if (nrow(failed) > 0)
+  div(class = "alert", id = "failed",
+      h3(sprintf("%d failed runs", nrow(failed))),
+      p("The statistics do not use these runs."),
+      div(class = "scroll", HTML(knitr::kable(
+        transmute(failed, suite, package = benchmark, compiler, run, failure = gsub("\\s+", " ", failure)),
+        format = "html"))))
+```
+
+## How the benchmarks run {#method}
+
+### Install benchmark {#install-method}
+
+Measures
+: `R CMD INSTALL` on the CRAN source tarball with `MAKEFLAGS=-j8`.
+  `timing-profile.R` gives the times
+  **elapsed** (wall time), **native** (`tools:::.shlib_internal`) and
+  **bytecode** (`compiler:::tryCmpfun`).
+
+Packages
+: `r length(ins_pkgs)`: the `r sum(!ins_pkgs %in% RECOMMENDED)` CRAN
+  packages with the most downloads and the
+  `r sum(ins_pkgs %in% RECOMMENDED)` recommended packages.
+
+Runs
+: For each package, `r ins_runs` runs with GNU R, then `r ins_runs` runs
+  with crbcc, one at a time.
+
+Value
+: The median of the runs. A total is the sum of the package values.
+
+Machine
+: `r machine(ins$meta)`, in the image build.
+
+Software
+: `r software(ins$meta)`.
+
+Date
+: `r started(ins$meta)`.
+
+### Compile benchmark {#compile-method}
+
+Measures
+: The warm time of one `cmpfun()` call for each closure. The closures are
+  the namespace functions, S4 methods and R6 methods of a package
+  (`crbcc:::package_closures`).
+
+Packages
+: The `r n_cl_pkg` packages of the install benchmark.
+
+Runs
+: One R process for each package and compiler, with the R JIT off
+  (following what `R CMD INSTALL` does). The process does one warm-up
+  pass, then `r cl_passes` timed passes. Each timed pass starts with `gc()`
+  and uses a new random order.
+
+Value
+: The median of the passes for each closure. The speedup of a closure is
+  its GNU R time divided by its crbcc time. The headline is the geometric
+  mean of the closure speedups.
+
+Excluded
+: Closures with a zero time (`r n_zero`) or with times of only one compiler
+  (`r n_missing`).
+
+Machine
+: `r machine(clo$meta)`, in the CI job `compile`.
+
+Software
+: `r software(clo$meta)`.
+
+Date
+: `r started(clo$meta)`.
+
+### Byte-code check {#check-method}
+
+Measures
+: One compile of each closure with each compiler, in the CI job `compile`.
+  A closure fails if the byte codes differ (`crbcc:::identical_strict`) or
+  a compiler stops with an error.
+
+Packages
+: `r n_chk_pkg`: the base packages without `datasets` and `tcltk`, and the
+  packages of the install benchmark.
+
+## Install results {#install-results}
+
+### Total time of `r n_grp[["all"]]` packages
+
+```{r install-bars}
+## A bar for each compiler, with a segment for each part of the elapsed
+## time. A segment shows its value only if the value fits in it.
+widest <- max(all_pk$elapsed_gnur, all_pk$elapsed_crbcc)
+install_bar <- function(compiler) {
+  v <- sapply(c("native", "bytecode", "rest"), \(m) all_pk[[paste0(m, "_", compiler)]])
+  total <- all_pk[[paste0("elapsed_", compiler)]]
+  div(div(class = paste("bar-head", compiler), span(span(class = "dot"), NAME[[compiler]]),
+          span(fmt(total), "s")),
+      div(class = "bar", style = sprintf("width: %.2f%%", 100 * total / widest),
+          lapply(names(v), \(m) span(
+            class = paste("seg", m),
+            style = sprintf("flex-grow: %.4f", max(v[[m]], 0)),
+            title = sprintf("%s: %s s", m, fmt(v[[m]])),
+            if (v[[m]] / widest >= 0.15) fmt(v[[m]])))))
+}
+tagList(
+  div(class = "bars", install_bar("gnur"), install_bar("crbcc")),
+  div(class = "key",
+      span(span(class = "sw native"), "native"),
+      span(span(class = "sw bytecode"), "bytecode"),
+      span(span(class = "sw rest"), "rest: elapsed \u2212 native \u2212 bytecode")))
+```
+
+- Byte-code compile: `r fmt(all_pk$bytecode_gnur)` s with GNU R,
+  `r fmt(all_pk$bytecode_crbcc)` s with crbcc.
+- Elapsed time: `r pct(less[["CRAN"]])` less for the `r n_grp[["CRAN"]]`
+  CRAN packages, `r pct(less[["recommended"]])` less for the
+  `r n_grp[["recommended"]]` recommended packages.
+
+### The 15 slowest packages
+
+<p class="caption">Elapsed time of <code>R CMD INSTALL</code>. The bar is
+the native time. The label gives the change with crbcc.</p>
+
+```{r install-time-plot, fig.height = 5.8, fig.alt = "Elapsed install time of the 15 slowest packages with GNU R and crbcc"}
+## A dot for each compiler at the elapsed time of each package, on a bar of
+## the native time. The README gets the same figure on a wider canvas, thus
+## with smaller text.
+install_plot <- function(p) {
+  p <- mutate(p, package = factor(package, rev(package)),
+              change = round(100 * (elapsed_crbcc / elapsed_gnur - 1)),
+              change = paste0(if_else(change > 0, "+", ""), change, "%"))
+  dots <- p |>
+    select(package, gnur = elapsed_gnur, crbcc = elapsed_crbcc) |>
+    pivot_longer(-package, names_to = "compiler")
+  ggplot(p, aes(y = package)) +
+    geom_col(aes(x = native_gnur), fill = PART[["native"]], width = 0.55) +
+    geom_segment(aes(x = elapsed_crbcc, xend = elapsed_gnur), colour = INK3, linewidth = 0.8) +
+    geom_point(data = dots, aes(value, fill = compiler), shape = 21, colour = "white",
+               size = 3.8, stroke = 1) +
+    geom_text(aes(x = pmax(elapsed_gnur, elapsed_crbcc), label = change),
+              hjust = 0, nudge_x = 0.025 * max(p$elapsed_gnur), size = 4.4, colour = INK2) +
+    compiler_fill +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.1))) +
+    labs(x = "elapsed time (s)", y = NULL)
+}
+top <- install_plot(head(pk, 15))
 if (nzchar(params$assets))
-  ggsave(file.path(params$assets, "install-time-top15.png"), install_plot(head(pk, 15), top = FALSE),
-         width = 9, height = 1.5 + 0.25 * 15, dpi = 120, bg = "white")
-grid::grid.draw(install_plot(pk))
+  ggsave(file.path(params$assets, "install-time-top15.png"), top,
+         width = 8.4, height = 5.8, dpi = 200, bg = "white")
+top
 ```
 
-The table gives the package values in the order of the plot. To sort the
-table, click a column header.
+## Compile results {#compile-results}
 
-```{r install-table}
-ins_tab <- select(pk, package, group)
-for (m in c("elapsed", "native", "bytecode")) {
-  gnur <- pk[[paste0(m, "_gnur")]]
-  crbcc <- pk[[paste0(m, "_crbcc")]]
-  ins_tab[paste0(m, c("_gnur", "_crbcc", "_diff", "_ratio"))] <- list(gnur, crbcc, gnur - crbcc, ratio(gnur, crbcc))
-}
-ins_tab$bytecode_share <- pk$bytecode_gnur / pk$elapsed_gnur
-el_cols <- compare_cols("elapsed", 2)
-na_cols <- compare_cols("native", 2)
-bc_cols <- compare_cols("bytecode", 3)
-sortable(ins_tab,
-  columns = c(el_cols, na_cols, bc_cols,
-              list(bytecode_share = colDef(name = "share", format = colFormat(percent = TRUE, digits = 0)))),
-  groups = list(colGroup("elapsed (s)", names(el_cols)), colGroup("native (s)", names(na_cols)),
-                colGroup("bytecode (s)", c(names(bc_cols), "bytecode_share"))))
-```
+### Speedup by closure size
 
-## Compile benchmark {#compile-benchmark}
+<p class="caption">A point is a closure. The size is the number of AST nodes
+(<code>crbcc:::function_size</code>). The line gives the geometric means of
+the size classes 1-9, 10-99, and so on.</p>
 
-### Methodology {#compile-methodology}
-
-The closures of a package are its namespace functions, its S4 methods and its
-R6 methods (`crbcc:::package_closures`). The check uses `r n_chk_pkg`
-packages: the base packages without `datasets` and `tcltk`, and the packages
-of the install benchmark. The timed passes use only the `r n_cl_pkg` packages of
-the install benchmark. The counts are closures, not compile events. Thus they
-do not compare with older reports.
-
-First, the check compiles each closure one time with each compiler, and
-compares the byte code (`crbcc:::identical_strict`). A closure fails the
-check if the byte code differs or a compiler stops with an error.
-
-Then one R process for each package and compiler measures the compile times.
-For each package, the GNU R process comes first, then the crbcc process. As in
-`R CMD INSTALL`, the R JIT is off. The benchmark sets
-`OPENBLAS_NUM_THREADS=1` for each R process, because one OpenBLAS thread for
-each CPU adds CPU time that depends on the machine. Each process does these
-steps:
-
-1. A warm-up pass compiles each closure one time without a measurement.
-2. `r cl_passes` timed passes compile each closure one time, and the
-   benchmark measures the time of each `cmpfun()` call. Each timed pass
-   starts with `gc()` and compiles the closures in a new random order.
-
-The times do not include the first compile of a closure, which can load code of
-the compiler and force lazy-load promises.
-
-The value of a closure is the median of its passes. Because of the random
-order, a garbage collection occurs in a different closure in each pass, and
-the median removes its time. The time of a pass is the sum of its closure
-times, with its garbage collections. The value of a package is the median of
-its pass times. A total is the sum of the package values.
-
-The speedup of a closure is its GNU R time divided by its crbcc time. The
-compile speedup in the TL;DR and in the README badge is the geometric mean of
-the speedups of all timed closures. In this mean, each closure has the same
-weight. In the ratio of the totals, which the results also give, the large
-closures have more weight. If a closure has a zero time, its speedup is not
-defined, and the geometric means do not use it. If a closure has times of
-only one compiler, the statistics do not use it. In this report,
-`r n_zero` closures have a zero time and `r n_missing` closures have times of
-only one compiler.
-
-For a group of closures, for example a package, the speedup is the geometric
-mean of the closure speedups. The size of a closure is the number of AST
-nodes in its body and in the default values of its formals
-(`crbcc:::function_size`). The statistics do not use failed runs. In the
-table of the packages, diff and ratio compare the totals, as in the install
-benchmark.
-
-The benchmark ran in the benchmark image, with the crbcc of the commit below.
-
-```{r compile-env, results = "asis"}
-env_list(clo)
-```
-
-### Results {#compile-results}
-
-`r correct`
-
-```{r check-failed, eval = nrow(chk_failed) > 0}
-chk_failed |>
-  transmute(package = benchmark, failure = gsub("\\s+", " ", failure))
-```
-
-```{r compile-failed}
-failed_table(filter(clo$data, suite == "compile"))
-```
-
-The timed passes compiled `r fmt(nrow(cl), 0)` closures of `r n_cl_pkg`
-packages. The compile speedup, the geometric mean of the closure speedups, is
-`r times(speedup)`. GNU R compiles the closures in `r fmt(cmp[["gnur"]], 2)` s,
-and crbcc in `r fmt(cmp[["crbcc"]], 2)` s. Thus the ratio of the totals is
-`r times(cmp_ratio)`.
-
-The median closure size is `r fmt(median(cl$size), 0)` AST nodes. The
-largest closure is `r largest_name` in `r largest$package`, with
-`r fmt(largest$size, 0)` nodes.
-
-```{r size-table}
-cl |>
-  group_by(`size (AST nodes)` = class) |>
-  summarise(closures = fmt(n(), 0),
-            `gnur median (us)` = fmt(median(gnur) * 1e6),
-            `crbcc median (us)` = fmt(median(crbcc) * 1e6),
-            `gnur / crbcc geo. mean` = times(gmean(gnur / crbcc)))
-```
-
-```{r size-time-plot, fig.height = 6}
-long <- cl |>
-  pivot_longer(all_of(COMPILERS), names_to = "compiler", values_to = "time") |>
-  mutate(compiler = factor(compiler, COMPILERS))
-mid <- long |>
-  group_by(compiler, class) |>
-  summarise(size = median(size), time = median(time), .groups = "drop")
-ggplot(long, aes(size, time * 1e6, colour = compiler)) +
-  geom_point(size = 0.9, alpha = 0.3, stroke = 0) +
-  geom_line(data = mid, linewidth = 0.9) +
-  geom_point(data = mid, aes(fill = compiler), shape = 21, colour = "white",
-             size = 3, stroke = 0.8) +
-  compiler_colour + compiler_fill + log_x() + log_y() +
-  guides(colour = guide_legend(override.aes = list(alpha = 1))) +
-  labs(x = "closure size (AST nodes, log scale)", y = "compile time (us, log scale)",
-       subtitle = "The points are closures. The line is the median of the size class.")
-```
-
-```{r size-speedup-plot, fig.height = 4.5}
+```{r size-speedup-plot, fig.width = 7.2, fig.height = 4.6, fig.alt = "Compile speedup of each closure against its size"}
 x <- cl |> mutate(speedup = gnur / crbcc) |> filter(is.finite(speedup), speedup > 0)
 mid <- x |>
   group_by(class) |>
   summarise(size = median(size), speedup = gmean(speedup), .groups = "drop")
 ggplot(x, aes(size, speedup)) +
-  geom_point(size = 0.9, alpha = 0.35, stroke = 0, colour = COL[["crbcc"]]) +
-  geom_line(data = mid, colour = INK, linewidth = 0.9) +
-  geom_point(data = mid, colour = INK, size = 2.5) +
-  log_x() + log_y() +
-  labs(x = "closure size (AST nodes, log scale)", y = "speedup, gnur / crbcc (log scale)",
-       subtitle = "The points are closures. The line is the geometric mean of the size class.")
+  geom_point(size = 1, alpha = 0.15, stroke = 0, colour = INK3) +
+  geom_line(data = mid, colour = INK, linewidth = 0.8) +
+  geom_point(data = mid, shape = 21, fill = INK, colour = "white", size = 3.2, stroke = 1) +
+  geom_text(data = mid, aes(label = times(speedup, 0)), vjust = -1.1, size = 4.4,
+            fontface = "bold", colour = INK) +
+  scale_x_log10(labels = scales::label_comma()) +
+  scale_y_log10(breaks = c(0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000), labels = \(v) paste0(v, "x")) +
+  labs(x = "closure size (AST nodes)", y = "speedup")
 ```
 
-The table gives the totals and the closure speedup of each package. The
-sizes are in AST nodes. The package with the longest GNU R total is first.
+- Total compile time: `r fmt(cmp[["gnur"]], 2)` s with GNU R,
+  `r fmt(cmp[["crbcc"]], 2)` s with crbcc. The ratio of the totals is
+  `r times(cmp[["gnur"]] / cmp[["crbcc"]])`, with more weight for large
+  closures.
 
-```{r compile-package}
-cmp_tab <- cl |>
+## Data {#data}
+
+<p class="files"><a href="install.csv">install.csv</a><a href="compile.csv">compile.csv</a></p>
+
+The
+[`crbcc_bench.py`](https://github.com/PRL-PRG/crbcc/blob/main/inst/benchmarks/crbcc_bench.py)
+docstring gives the columns of the raw data.
+
+```{r tables-setup}
+## A table that the reader can search and sort. The columns must be numeric,
+## because the sort uses the values, not the formatted text. The table has a
+## fixed height, thus the line below it gives the row count.
+sortable <- function(data, columns, groups) tagList(
+  reactable(data, columns = c(list(package = colDef(minWidth = 110, sticky = "left"),
+                                   group = colDef(minWidth = 125)), columns),
+            columnGroups = groups, searchable = TRUE, pagination = FALSE, height = 480,
+            compact = TRUE, highlight = TRUE,
+            defaultColDef = colDef(minWidth = 72, headerStyle = list(whiteSpace = "nowrap")),
+            theme = reactableTheme(color = INK, borderColor = GRID, highlightColor = "#f6f6f3",
+                                   style = list(fontSize = "14px", fontVariantNumeric = "tabular-nums"),
+                                   headerStyle = list(color = INK2, fontWeight = 600),
+                                   searchInputStyle = list(width = "100%", marginBottom = "8px"))),
+  p(class = "caption rows", sprintf("%d packages", nrow(data))))
+## The column of one compiler. The CSS puts a dot in its color in the header.
+by_compiler <- function(compiler, format) colDef(name = NAME[[compiler]], headerClass = compiler, format = format)
+sec <- function(digits) colFormat(digits = digits, separators = TRUE)
+```
+
+### Install benchmark
+
+- Times in s, the median of the runs. **native** is the GNU R time,
+  because crbcc does not change the native code.
+- **reduction**: the part of the GNU R elapsed time that crbcc saves.
+
+```{r install-table}
+## Without round(), a value between -0.5% and 0% shows as "-0%". The
+## addition of 0 changes a negative zero to zero.
+pk |>
+  transmute(package, group, elapsed_gnur, elapsed_crbcc, reduction = round(1 - elapsed_crbcc / elapsed_gnur, 2) + 0,
+            bytecode_gnur, bytecode_crbcc, native_gnur) |>
+  sortable(columns = list(
+             elapsed_gnur = by_compiler("gnur", sec(2)), elapsed_crbcc = by_compiler("crbcc", sec(2)),
+             reduction = colDef(format = colFormat(percent = TRUE, digits = 0), minWidth = 92),
+             bytecode_gnur = by_compiler("gnur", sec(3)), bytecode_crbcc = by_compiler("crbcc", sec(3)),
+             native_gnur = colDef(name = "native (s)", format = sec(2), minWidth = 90)),
+           groups = list(colGroup("elapsed (s)", c("elapsed_gnur", "elapsed_crbcc", "reduction")),
+                         colGroup("bytecode (s)", c("bytecode_gnur", "bytecode_crbcc"))))
+```
+
+### Compile benchmark
+
+- **size**: the median closure size, in AST nodes.
+- **total**: the median pass time, in ms. A pass time is the sum of its
+  closure times.
+- **speedup**: the geometric mean of the closure speedups.
+
+```{r compile-table}
+cl |>
   group_by(package) |>
-  summarise(closures = n(), size_median = median(size), size_max = max(size),
-            speedup = gmean(gnur / crbcc)) |>
+  summarise(closures = n(), size = median(size), speedup = gmean(gnur / crbcc)) |>
   inner_join(cl_pk, by = "package") |>
   arrange(desc(gnur)) |>
-  transmute(package, group = pkg_group(package), closures, size_median, size_max,
-            total_gnur = 1e3 * gnur, total_crbcc = 1e3 * crbcc, total_diff = total_gnur - total_crbcc,
-            total_ratio = ratio(gnur, crbcc), speedup)
-tot_cols <- compare_cols("total", 1, ratio_digits = 1)
-count <- colFormat(digits = 0, separators = TRUE)
-sortable(cmp_tab,
-  columns = c(list(closures = colDef(name = "count", format = count),
-                   size_median = colDef(name = "median size", format = count, minWidth = 85),
-                   size_max = colDef(name = "largest", format = count)),
-              tot_cols,
-              list(speedup = colDef(name = "geo. mean", format = colFormat(digits = 1, suffix = "x"),
-                                    minWidth = 105))),
-  groups = list(colGroup("closures", c("closures", "size_median", "size_max")),
-                colGroup("total compile time (ms)", names(tot_cols)),
-                colGroup("closure speedup", "speedup")))
+  transmute(package, group = pkg_group(package), closures, size,
+            gnur = 1e3 * gnur, crbcc = 1e3 * crbcc, speedup) |>
+  sortable(columns = list(
+             closures = colDef(format = sec(0)), size = colDef(format = sec(0)),
+             gnur = by_compiler("gnur", sec(1)), crbcc = by_compiler("crbcc", sec(1)),
+             speedup = colDef(format = colFormat(digits = 1, suffix = "x"))),
+           groups = list(colGroup("total (ms)", c("gnur", "crbcc"))))
 ```
