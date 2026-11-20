@@ -26,10 +26,10 @@ R (plus a few tricks).
 [![Installation time of the 15 packages with the longest GNU R installation time](https://prl-prg.github.io/crbcc/install-time-top15.png)](https://prl-prg.github.io/crbcc/#install-results)
 The figure shows the installation time of the 15 packages with the
 longest GNU R installation time. `R CMD INSTALL` builds each package from the
-CRAN source, also its native code. The left panel is the elapsed time of
-`R CMD INSTALL`, and the middle panel is the time in the byte-code compiler.
-The right panel is the part of the GNU R elapsed time that the GNU R
-byte-code compiler uses.
+CRAN source, also its native code. The dots are the elapsed time of
+`R CMD INSTALL` with each compiler. The bar is the time in the
+native-code compiler, which crbcc does not change. The label gives the
+change with crbcc.
 
 For more details check the [benchmark report](https://prl-prg.github.io/crbcc/).
 
