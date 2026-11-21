@@ -15,7 +15,7 @@ crbcc compiles R code to byte code. It gives the same byte code as the
 compiler package of R, but it is faster. This vignette shows how to use
 crbcc for a closure, for the installation of packages and for the JIT of R.
 For the performance of crbcc, refer to the
-[benchmark report](https://prl-prg.github.io/crbcc/).
+[benchmark report](https://prl-prg.github.io/crbcc/benchmarks.html).
 
 ## Compile a closure
 

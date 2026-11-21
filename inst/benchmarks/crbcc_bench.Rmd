@@ -1,5 +1,5 @@
 ---
-pagetitle: "crbcc: R bytecode compiler written in C"
+pagetitle: "Benchmark report • crbcc"
 output:
   html_document:
     theme: null
@@ -29,10 +29,11 @@ library(htmltools)
 ## The CSS of the page gets the same values.
 COL    <- c(gnur = "#2a78d6", crbcc = "#eb6834")
 NAME   <- c(gnur = "GNU R", crbcc = "crbcc")
-INK    <- "#0b0b0b"  # primary text
-INK2   <- "#52514e"  # secondary text, axes
-INK3   <- "#898781"  # muted marks
-GRID   <- "#e4e3df"  # grid lines
+## The gray colors of the pkgdown site (Bootstrap 5) on a white background.
+INK    <- "#212529"  # primary text
+INK2   <- "#595c5f"  # secondary text, axes
+INK3   <- "#909294"  # muted marks
+GRID   <- "#dee2e6"  # grid lines
 ## The parts of the install time, from other slots of the same palette.
 PART   <- c(native = "#9085e9", bytecode = "#eda100", rest = "#e87ba4")
 COMPILERS <- names(COL)
@@ -58,6 +59,10 @@ machine  <- function(m) sprintf("%s, %s logical CPUs, %s %s", m$cpu_model %||% "
 software <- function(m) sprintf("R %s, crbcc %s, commit %s", sub("^R version ([^ ]+).*", "\\1", m$r_version),
                                 m$crbcc_version, commit_link(m$crbcc_commit))
 started  <- function(m) paste(sub("T", " ", substr(m$timestamp, 1, 16)), "UTC")
+## The navbar and the footer show the version and the developers, as the
+## pkgdown site does.
+description <- read.dcf(file.path(dirname(knitr::current_input(dir = TRUE)), "../../DESCRIPTION"))[1, ]
+devs <- Filter(\(p) any(p$role %in% c("aut", "cre", "fnd")), eval(parse(text = description[["Authors@R"]])))
 
 theme_set(theme_minimal(base_size = 15) + theme(
   text = element_text(colour = INK2),
@@ -171,68 +176,138 @@ if (nzchar(params$assets)) {
 ```
 
 ```{css}
+/* The look of the pkgdown site: Bootstrap 5 and the pkgdown rules, at the
+   same breakpoints. The report must be one self-contained file, thus it has
+   a copy of the visible rules, not the CSS files of the site. */
 :root {
   color-scheme: light;
-  --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
-  --page: #f6f6f3; --card: #fff; --line: #e1e0d9; --code: #efeee9;
+  --ink: #212529; --ink-2: rgba(33, 37, 41, 0.75); --ink-3: rgba(33, 37, 41, 0.5);
+  --line: #dee2e6; --card-line: rgba(0, 0, 0, 0.175);
+  --link: #0d6efd; --link-hover: #0a58ca; --hover-bg: rgba(13, 110, 253, 0.1);
   --good: #006300; --bad: #d03b3b;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --mono: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
-html { -webkit-text-size-adjust: 100%; }
+*, ::before, ::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 56px; }
 body {
-  max-width: 800px; margin: 0 auto; padding: 0 16px 64px;
-  background: var(--page); color: var(--ink);
-  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  margin: 0; background: #fff; color: var(--ink); font-size: 16px; line-height: 1.5;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", "Liberation Sans",
+    Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
-h1, h2, h3 { line-height: 1.2; color: var(--ink); }
-h1 { font-size: clamp(1.75rem, 6vw, 2.5rem); font-weight: 700; letter-spacing: -0.025em; margin: 0 0 16px; }
-h2 { font-size: 1.5rem; font-weight: 650; letter-spacing: -0.015em; margin: 56px 0 16px; }
-h3 { font-size: 1.0625rem; font-weight: 600; margin: 0 0 8px; }
-p, ul, ol, dl { margin: 0 0 12px; }
-ul, ol { padding-left: 1.25rem; }
-li { margin: 2px 0; }
-a { color: inherit; text-decoration-color: var(--ink-3); text-underline-offset: 2px; }
-a:hover { text-decoration-color: var(--ink); }
-code { font: 0.875em var(--mono); background: var(--code); padding: 1px 4px; border-radius: 4px; white-space: nowrap; }
+h1, h2, h3 { font-weight: 500; line-height: 1.2; margin: 0 0 0.5rem; }
+h1 { font-size: calc(1.375rem + 1.5vw); }
+h2 { font-size: 1.75rem; margin-top: 1.5rem; }
+h3 { font-size: 1.25rem; font-weight: 700; margin-top: 1rem; }
+p, ul, ol, dl { margin: 0 0 1rem; }
+ul, ol { padding-left: 2rem; }
+small { font-size: 0.875em; }
+a { color: var(--link); }
+a:hover { color: var(--link-hover); }
+code { font-family: var(--mono); font-size: 0.875em; color: #000; background: rgba(0, 0, 0, 0.04); padding: 2px 4px; border-radius: 6px; white-space: nowrap; }
+a > code { color: inherit; }
 img { max-width: 100%; height: auto; display: block; }
 
-.hero { padding: 48px 0 8px; }
-.eyebrow { font-size: 0.8125rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; }
-.lede { font-size: 1.0625rem; color: var(--ink-2); max-width: 64ch; }
-.links { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 0; }
-.links a { padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); font-size: 0.875rem; text-decoration: none; }
-.links a:hover { border-color: var(--ink-3); }
+/* The navbar of the site, without the search. The script below hides it on a
+   scroll down, as headroom.js does on the site. */
+.navbar { position: fixed; top: 0; left: 0; right: 0; z-index: 1030; padding: 8px 0; line-height: normal; background: #f8f9fa; transition: transform 400ms ease; }
+.navbar.unpinned { transform: translateY(-100%); }
+.navbar > .container { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; min-height: 38px; }
+.navbar a { text-decoration: none; }
+.navbar-brand { font-size: 1.25rem; color: #000; padding: 5px 0; margin-right: 0.5rem; }
+.navbar-brand:hover { color: #000; }
+.version { color: var(--ink-2); margin-right: auto; }
+.navbar-toggler { padding: 4px 12px; font-size: 1.25rem; line-height: 1; background: none; border: 1px solid rgba(0, 0, 0, 0.15); border-radius: 6px; cursor: pointer; }
+.navbar-toggler svg { width: 1.5em; height: 1.5em; vertical-align: middle; }
+.navbar-collapse { display: none; flex-basis: 100%; margin-left: 1rem; }
+.navbar-collapse.show { display: block; }
+.navbar-nav { list-style: none; margin: 0; padding: 0; }
+.nav-link { display: block; padding: 8px 0; border-radius: 6px; color: rgba(0, 0, 0, 0.65); }
+.nav-link:hover { color: rgba(0, 0, 0, 0.8); background: var(--hover-bg); }
+.active .nav-link { background: rgba(33, 37, 41, 0.1); }
+/* The icon does not change the line height, as the Font Awesome icon on the site. */
+.nav-link svg { width: 1.25em; height: 1.25em; margin: -0.25em 0; fill: currentColor; }
 
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 32px 0 12px; }
-.tile { display: flex; flex-direction: column; gap: 6px; padding: 18px 20px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; text-decoration: none; }
-.tile:hover { border-color: var(--ink-3); }
-.tile-label { font-size: 0.8125rem; font-weight: 600; color: var(--ink-2); }
-.tile-value { font-size: 2.5rem; font-weight: 650; letter-spacing: -0.03em; line-height: 1.05; color: var(--good); }
-.tile-value small { font-size: 1rem; font-weight: 600; letter-spacing: 0; color: var(--ink-2); margin-left: 6px; }
+/* The grid of the site: a column of at most 50rem, and the table of contents. */
+.container { margin: 0 auto; padding: 0 12px; }
+.row { display: flex; flex-wrap: wrap; margin: 0 -12px; }
+#main, aside { width: 100%; padding: 0 12px; margin-top: 56px; }
+#main { max-width: 50rem; }
+aside { display: none; }
+#toc { position: sticky; top: 56px; }
+#toc h2 { font-size: 1.25rem; }
+#toc ul { list-style: none; padding: 0; }
+#toc a { display: block; padding: 0.25rem 0.5rem; margin-bottom: 2px; border-radius: 6px; color: inherit; text-decoration: none; }
+#toc a:hover { background: var(--hover-bg); }
+.page-header { margin: 1.5rem 0 0.5rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--line); }
+footer { display: flex; column-gap: 1rem; margin: 1rem 0; padding-top: 1rem; border-top: 1px solid var(--line); font-size: 0.875em; color: rgba(33, 37, 41, 0.8); }
+footer div { flex: 1 1 auto; }
+@media (max-width: 575.98px) { footer { flex-direction: column; } }
+@media (min-width: 576px) {
+  .container { max-width: 540px; }
+  .page-header { min-height: 88px; }
+  .footer-right { text-align: right; }
+}
+@media (min-width: 768px) {
+  .container { max-width: 720px; }
+  #main { width: 75%; }
+  aside { display: block; width: 25%; }
+}
+@media (min-width: 992px) {
+  .container { max-width: 960px; }
+  /* The site has a search box in the navbar. Its baseline puts the navbar
+     text 1px lower. */
+  .navbar > .container { flex-wrap: nowrap; padding-top: 1px; }
+  .navbar-toggler { display: none; }
+  .navbar-collapse { display: flex; flex-grow: 1; }
+  .navbar-nav { display: flex; }
+  .navbar-nav:first-child { margin-right: auto; }
+  /* On the site, the search box puts the GitHub link 2px higher than the
+     other links. */
+  .navbar-nav:last-child { margin-top: -2px; }
+  .nav-link { padding: 8px; }
+}
+@media (min-width: 1200px) {
+  .container { max-width: 1140px; }
+  h1 { font-size: 2.5rem; }
+}
+@media (min-width: 1200px) and (max-width: 1399.98px) { .row { justify-content: space-evenly; } }
+@media (min-width: 1400px) {
+  .container { max-width: 1320px; }
+  body { font-size: 18px; }
+  aside { margin-left: 5rem; }
+}
+
+/* The components of the report, as Bootstrap cards and alerts. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 0 0 1rem; }
+.tile { display: flex; flex-direction: column; gap: 6px; padding: 1rem; border: 1px solid var(--card-line); border-radius: 6px; color: inherit; text-decoration: none; }
+.tile:hover { color: inherit; border-color: var(--ink-3); }
+.tile-label { font-size: 0.875em; font-weight: 600; color: var(--ink-2); }
+.tile-value { font-size: 2.5rem; font-weight: 500; line-height: 1.1; color: var(--good); }
+.tile-value small { font-size: 1rem; color: var(--ink-2); margin-left: 6px; }
 .tile.bad .tile-value { color: var(--bad); }
-.tile-context { font-size: 0.875rem; color: var(--ink-2); }
+.tile-context { font-size: 0.875em; color: var(--ink-2); }
 
-.note { font-size: 0.875rem; color: var(--ink-2); border-left: 3px solid var(--ink-3); padding: 2px 0 2px 12px; margin: 16px 0; }
-.alert { background: #fdf1f0; border: 1px solid #efc6c3; border-radius: 12px; padding: 16px 20px; margin: 16px 0; }
-.alert h3 { color: var(--bad); }
+.note { font-size: 0.875em; color: var(--ink-2); border-left: 4px solid var(--line); padding: 2px 0 2px 12px; margin: 0 0 1rem; }
+.page-header > :last-child, .note > :last-child, .alert > :last-child, .level3 > :last-child { margin-bottom: 0; }
+.alert { color: #58151c; background: #f8d7da; border: 1px solid #f1aeb5; border-radius: 6px; padding: 1rem; margin: 0 0 1rem; }
+.alert h3 { margin-top: 0; }
 .alert table { font-size: 0.8125rem; border-collapse: collapse; width: 100%; }
 .alert td:last-child { min-width: 16rem; }
-.alert th, .alert td { text-align: left; vertical-align: top; padding: 4px 8px; border-top: 1px solid #efc6c3; }
+.alert th, .alert td { text-align: left; vertical-align: top; padding: 4px 8px; border-top: 1px solid #f1aeb5; }
 .scroll { overflow-x: auto; }
 
-.level3 { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin: 0 0 12px; }
-.level3 > :last-child { margin-bottom: 0; }
-.caption { font-size: 0.875rem; color: var(--ink-2); }
+.level3 { border: 1px solid var(--card-line); border-radius: 6px; padding: 1rem; margin: 0 0 1rem; }
+.level3 h3 { margin-top: 0; }
+.caption { font-size: 0.875em; color: var(--ink-2); }
 .level3 img { margin: 8px auto 12px; }
 
-dl { display: grid; grid-template-columns: 6.5rem 1fr; gap: 8px 16px; font-size: 0.9375rem; }
-dt { font-size: 0.8125rem; font-weight: 600; color: var(--ink-2); padding-top: 2px; }
+dl { display: grid; grid-template-columns: 6.5rem 1fr; gap: 8px 16px; }
+dt { font-size: 0.875em; font-weight: 600; color: var(--ink-2); padding-top: 2px; }
 dd { margin: 0; }
 @media (max-width: 560px) {
   dl { grid-template-columns: 1fr; gap: 0; }
   dt { margin-top: 10px; }
   dt:first-child { margin-top: 0; }
-  .level3 { padding: 16px 14px; }
 }
 
 .dot, .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
@@ -244,16 +319,16 @@ dd { margin: 0; }
 .sw.rest, .seg.rest { background: var(--rest); }
 
 .bars { display: grid; gap: 14px; margin: 12px 0 14px; }
-.bar-head { display: flex; justify-content: space-between; font-size: 0.875rem; font-weight: 600; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.bar-head { display: flex; justify-content: space-between; font-size: 0.875em; font-weight: 600; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
 .bar { display: flex; gap: 2px; height: 28px; }
 .seg { flex: 0 0 0; min-width: 3px; border-radius: 4px; display: flex; align-items: center; font-size: 0.8125rem; font-weight: 600; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
 .seg:not(:empty) { padding: 0 7px; }
 .key { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 0.8125rem; color: var(--ink-2); margin-bottom: 12px; }
 
 .rt-th.gnur .rt-text-content::before, .rt-th.crbcc .rt-text-content::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
-.files { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
-.files a { font: 0.875rem var(--mono); padding: 6px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; text-decoration: none; }
-.files a:hover { border-color: var(--ink-3); }
+.files { display: flex; flex-wrap: wrap; gap: 8px; }
+.files a { font-family: var(--mono); font-size: 0.875em; padding: 4px 10px; border: 1px solid var(--card-line); border-radius: 6px; text-decoration: none; }
+.files a:hover { background: var(--hover-bg); }
 /* macOS hides a default scrollbar. A styled scrollbar stays visible, thus
    the reader sees that the table has more rows. */
 .rt-table::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -267,12 +342,49 @@ tags$style(sprintf(":root { --gnur: %s; --crbcc: %s; --native: %s; --bytecode: %
                    COL[["gnur"]], COL[["crbcc"]], PART[["native"]], PART[["bytecode"]], PART[["rest"]]))
 ```
 
-<header class="hero">
-<p class="eyebrow">crbcc benchmark report</p>
-<h1>R bytecode compiler written in C</h1>
-<p class="lede">crbcc gives the same byte code as the GNU R <code>compiler</code> package. It is faster, because it is written in C, not in R. It follows the same structure as the original compiler so all credit goes to Luke Tierney.</p>
-<p class="links"><a href="https://github.com/PRL-PRG/crbcc#readme">README and source code</a><a href="https://prl-prg.github.io/crbcc/crbcc.html">Use crbcc</a><a href="https://CRAN.R-project.org/package=crbcc">crbcc on CRAN</a></p>
-</header>
+```{r navbar}
+## The navbar of the pkgdown site (_pkgdown.yml). The links are relative,
+## because benchmarks.html is at the site root.
+nav_item <- function(href, ..., class = "nav-item") tags$li(class = class, tags$a(class = "nav-link", href = href, ...))
+tagList(
+  tags$nav(class = "navbar", div(class = "container",
+    tags$a(class = "navbar-brand", href = "index.html", "crbcc"),
+    tags$small(class = "version", description[["Version"]]),
+    tags$button(class = "navbar-toggler", type = "button", `aria-controls` = "navbar", `aria-expanded` = "false",
+                `aria-label` = "Toggle navigation",
+                HTML('<svg viewBox="0 0 30 30"><path stroke="rgba(33, 37, 41, 0.75)" stroke-linecap="round" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"/></svg>')),
+    div(id = "navbar", class = "navbar-collapse",
+      tags$ul(class = "navbar-nav",
+        nav_item("articles/crbcc.html", "Get started"),
+        nav_item("reference/index.html", "Reference"),
+        nav_item("benchmarks.html", "Benchmarks", class = "nav-item active")),
+      tags$ul(class = "navbar-nav",
+        ## The GitHub mark of Octicons (MIT license).
+        nav_item("https://github.com/PRL-PRG/crbcc/", `aria-label` = "GitHub",
+                 HTML('<svg viewBox="0 0 16 16"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>')))))),
+  tags$script(HTML("
+    var nav = document.querySelector('.navbar'), menu = document.getElementById('navbar'), y = scrollY;
+    addEventListener('scroll', function () {
+      nav.classList.toggle('unpinned', scrollY > y && scrollY > nav.offsetHeight);
+      y = scrollY;
+    });
+    nav.querySelector('.navbar-toggler').onclick = function () {
+      this.setAttribute('aria-expanded', menu.classList.toggle('show'));
+    };")))
+```
+
+:::::: container
+::::: row
+:::: {#main}
+
+<div class="page-header">
+<h1>Benchmark report</h1>
+<small>Source: <a href="https://github.com/PRL-PRG/crbcc/blob/main/inst/benchmarks/crbcc_bench.Rmd"><code>inst/benchmarks/crbcc_bench.Rmd</code></a></small>
+</div>
+
+crbcc gives the same byte code as the GNU R `compiler` package. It is
+faster, because it is written in C, not in R. It follows the same structure
+as the original compiler so all credit goes to Luke Tierney.
 
 ```{r tiles}
 tile <- function(href, label, value, unit, context, class = "")
@@ -500,10 +612,11 @@ sortable <- function(data, columns, groups) tagList(
             columnGroups = groups, searchable = TRUE, pagination = FALSE, height = 480,
             compact = TRUE, highlight = TRUE,
             defaultColDef = colDef(minWidth = 72, headerStyle = list(whiteSpace = "nowrap")),
-            theme = reactableTheme(color = INK, borderColor = GRID, highlightColor = "#f6f6f3",
+            theme = reactableTheme(color = INK, borderColor = GRID, highlightColor = "#f8f9fa",
                                    style = list(fontSize = "14px", fontVariantNumeric = "tabular-nums"),
                                    headerStyle = list(color = INK2, fontWeight = 600),
-                                   searchInputStyle = list(width = "100%", marginBottom = "8px"))),
+                                   searchInputStyle = list(width = "100%", marginBottom = "8px", padding = "6px 12px",
+                                                           borderColor = GRID, borderRadius = "6px"))),
   p(class = "caption rows", sprintf("%d packages", nrow(data))))
 ## The column of one compiler. The CSS puts a dot in its color in the header.
 by_compiler <- function(compiler, format) colDef(name = NAME[[compiler]], headerClass = compiler, format = format)
@@ -552,3 +665,27 @@ cl |>
              speedup = colDef(format = colFormat(digits = 1, suffix = "x"))),
            groups = list(colGroup("total (ms)", c("gnur", "crbcc"))))
 ```
+
+::::
+
+<aside>
+<nav id="toc" aria-label="Table of contents">
+<h2>On this page</h2>
+<ul>
+<li><a href="#method">How the benchmarks run</a></li>
+<li><a href="#install-results">Install results</a></li>
+<li><a href="#compile-results">Compile results</a></li>
+<li><a href="#data">Data</a></li>
+</ul>
+</nav>
+</aside>
+
+:::::
+
+```{r footer}
+tags$footer(
+  div(p(sprintf("Developed by %s.", paste(format(devs, include = c("given", "family")), collapse = ", ")))),
+  div(class = "footer-right", p(HTML('Report built with <a href="https://rmarkdown.rstudio.com/">R Markdown</a>.'))))
+```
+
+::::::

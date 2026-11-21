@@ -12,3 +12,5 @@
 ^\.git-blame-ignore-revs$
 ^\.cache$
 ^bench$
+^_pkgdown\.yml$
+^docs$
