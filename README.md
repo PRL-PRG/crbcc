@@ -3,7 +3,7 @@
 [![CRAN status](https://www.r-pkg.org/badges/version/crbcc)](https://CRAN.R-project.org/package=crbcc)
 [![CRAN downloads](https://cranlogs.r-pkg.org/badges/grand-total/crbcc)](https://CRAN.R-project.org/package=crbcc)
 [![CI](https://github.com/PRL-PRG/crbcc/actions/workflows/ci.yml/badge.svg)](https://github.com/PRL-PRG/crbcc/actions/workflows/ci.yml)
-[![Compile speedup](https://img.shields.io/endpoint?url=https%3A%2F%2Fprl-prg.github.io%2Fcrbcc%2Fspeedup.json)](https://prl-prg.github.io/crbcc/)
+[![Compile speedup](https://img.shields.io/endpoint?url=https%3A%2F%2Fprl-prg.github.io%2Fcrbcc%2Fspeedup.json)](https://prl-prg.github.io/crbcc/benchmarks.html)
 [![License: GPL (>= 2)](<https://img.shields.io/badge/license-GPL%20(%3E%3D%202)-blue>)](https://www.r-project.org/Licenses/GPL-2)
 
 `crbcc` is an R package that compiles R code to bytecode using a C implementation.
@@ -23,7 +23,7 @@ R (plus a few tricks).
 - Package installation is often dominated by the native code compilation (C/C++/Fortran)
   but even with that crbcc can save approximately **25% of the time**.
 
-[![Installation time of the 15 packages with the longest GNU R installation time](https://prl-prg.github.io/crbcc/install-time-top15.png)](https://prl-prg.github.io/crbcc/#install-results)
+[![Installation time of the 15 packages with the longest GNU R installation time](https://prl-prg.github.io/crbcc/install-time-top15.png)](https://prl-prg.github.io/crbcc/benchmarks.html#install-results)
 The figure shows the installation time of the 15 packages with the
 longest GNU R installation time. `R CMD INSTALL` builds each package from the
 CRAN source, also its native code. The dots are the elapsed time of
@@ -31,7 +31,7 @@ CRAN source, also its native code. The dots are the elapsed time of
 native-code compiler, which crbcc does not change. The label gives the
 change with crbcc.
 
-For more details check the [benchmark report](https://prl-prg.github.io/crbcc/).
+For more details check the [benchmark report](https://prl-prg.github.io/crbcc/benchmarks.html).
 
 ## Requirements
 
@@ -57,7 +57,7 @@ pak::pak("PRL-PRG/crbcc")
 
 For the details and more examples, refer to the vignette:
 `vignette("crbcc", package = "crbcc")` or
-[online](https://prl-prg.github.io/crbcc/crbcc.html).
+[online](https://prl-prg.github.io/crbcc/articles/crbcc.html).
 
 ### Compile a function
 
@@ -167,7 +167,7 @@ for each crbcc version. The compile benchmark measures the compile time of
 each closure of the same 65 packages. The CI runs it for each pull request
 and each push to `main`.
 
-- [Benchmark report](https://prl-prg.github.io/crbcc/): the results of the
+- [Benchmark report](https://prl-prg.github.io/crbcc/benchmarks.html): the results of the
   last push to `main`. The source is `inst/benchmarks/crbcc_bench.Rmd`.
 - [`inst/benchmarks/README.md`](https://github.com/PRL-PRG/crbcc/blob/main/inst/benchmarks/README.md): what the
   benchmarks measure, how the Docker image is built, and how to run the

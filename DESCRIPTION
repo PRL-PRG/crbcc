@@ -22,5 +22,5 @@ Suggests:
     knitr,
     rmarkdown
 VignetteBuilder: knitr
-URL: https://github.com/PRL-PRG/crbcc
+URL: https://prl-prg.github.io/crbcc/, https://github.com/PRL-PRG/crbcc
 BugReports: https://github.com/PRL-PRG/crbcc/issues
