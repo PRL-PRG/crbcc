@@ -8,7 +8,7 @@ The benchmarks compare crbcc with the GNU R byte-code compiler:
 - **Compile benchmark**: the compile time of each closure with each
   compiler.
 
-The [benchmark report](https://prl-prg.github.io/crbcc/) shows the results of
+The [benchmark report](https://prl-prg.github.io/crbcc/benchmarks.html) shows the results of
 the last push to `main`.
 
 ## Files
@@ -123,8 +123,9 @@ The workflow `.github/workflows/ci.yml` has these benchmark jobs:
   `compile.csv`. Thus the install results are for the crbcc of the image,
   not for the pull request. The image does not have `reactable`, thus the
   job installs it from the CRAN snapshot of the image into a job library.
-- **pages**: for a push to `main`, puts the report on GitHub Pages.
-  `README.md` shows its figure and its badge.
+- **pages**: for a push to `main`, puts the report on GitHub Pages as
+  `benchmarks.html`, with the pkgdown site. `README.md` shows its figure and
+  its badge.
 
 ## Run in the image
 
@@ -152,7 +153,7 @@ uv run --script ../inst/benchmarks/crbcc_bench.py \
   --include '^check/' --include '^compile/' --csv compile.csv
 ```
 
-To render the report to `bench/site/index.html`, use these commands in
+To render the report to `bench/site/benchmarks.html`, use these commands in
 `bench/`:
 
 ```bash
@@ -160,7 +161,7 @@ mkdir -p rlib
 Rscript -e 'install.packages("reactable", "rlib", repos = Sys.getenv("CRAN_SNAPSHOT"))'
 cp "$CRBCC_BENCHMARKS/install.csv" .
 R_LIBS="$PWD/rlib:$R_LIBS" Rscript -e 'rmarkdown::render("../inst/benchmarks/crbcc_bench.Rmd",
-  output_dir = "site", output_file = "index.html", knit_root_dir = getwd(),
+  output_dir = "site", output_file = "benchmarks.html", knit_root_dir = getwd(),
   params = list(install = "install.csv", compile = "compile.csv", assets = "site"))'
 cp install.csv compile.csv site/
 ```

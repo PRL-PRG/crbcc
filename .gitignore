@@ -43,3 +43,6 @@ compile_flags.txt
 
 # Work directory of make test-compile-all-packages
 /bench/
+
+# Output of pkgdown::build_site()
+/docs/

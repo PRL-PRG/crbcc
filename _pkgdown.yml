@@ -1,0 +1,18 @@
+url: https://prl-prg.github.io/crbcc/
+
+template:
+  bootstrap: 5
+
+# The CI job report puts benchmarks.html at the site root. The report
+# inst/benchmarks/crbcc_bench.Rmd has a copy of this navbar.
+navbar:
+  structure:
+    left: [intro, reference, benchmarks]
+  components:
+    benchmarks:
+      text: Benchmarks
+      href: benchmarks.html
+
+# The vignette was at crbcc.html before the pkgdown site.
+redirects:
+  - ["crbcc.html", "articles/crbcc.html"]
